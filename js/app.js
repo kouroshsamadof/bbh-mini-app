@@ -64,28 +64,56 @@ const apiCall = async (path, opts = {}) => {
 /* اعضا از دیتابیس زنده‌ی ربات اصلی می‌آیند؛ در صورت قطع سرور، لیست خالی نمایش داده می‌شود */
 const state = { members: [], meId: null, judgments: [] };
 
-const refreshState = async () => {
-  const data = await apiCall('/api/state');
-  if (!data) return false;
-  state.members.length = 0;
-  for (const m of (data.members || [])) {
-    state.members.push({
-      id: m.id,
-      username: m.username || null,
-      name: m.name,
-      age: m.age ?? null,
-      ability: m.ability || '',
-      plus: m.plus || 0,
-      warn: m.warn || 0,
-      strike: m.strike || 0,
-      stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
-      final: m.final ?? 0,
-      createdAt: new Date().toISOString(),
-    });
-  }
-  state.judgments = Array.isArray(data.history) ? data.history : [];
-  return true;
-};
+async function refreshState() {
+  const statePath = '/api/state';
+  // اگر داخل تلگرام هستیم، از دیتابیس زنده بخوانیم
+  try {
+    const res = await apiCall(statePath);
+    if (res && Array.isArray(res.members) && res.members.length > 0) {
+      state.members.length = 0;
+      for (const m of res.members) {
+        state.members.push({
+          id: m.id,
+          username: m.username || null,
+          name: m.name,
+          age: m.age ?? null,
+          ability: m.ability || '',
+          plus: m.plus || 0,
+          warn: m.warn || 0,
+          strike: m.strike || 0,
+          stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+          final: m.final ?? 0,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      state.judgments = Array.isArray(res.history) ? res.history : [];
+      return true;
+    }
+  } catch (e) { /* اتصال ناموفق — به اسنپ‌شات برمیگردیم */ }
+  // Fallback: اسنپ‌شات ایستا
+  try {
+    const snap = await fetch('js/snapshot.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+    if (!snap || !Array.isArray(snap.members)) return false;
+    state.members.length = 0;
+    for (const m of snap.members) {
+      state.members.push({
+        id: m.id,
+        username: m.username || null,
+        name: m.name,
+        age: m.age ?? null,
+        ability: m.ability || '',
+        plus: m.plus || 0,
+        warn: m.warn || 0,
+        strike: m.strike || 0,
+        stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+        final: m.final ?? 0,
+        createdAt: snap.syncedAt || new Date().toISOString(),
+      });
+    }
+    state.judgments = [];
+    return true;
+  } catch (e) { return false; }
+}
 
 const MEMBERS = state.members;
 const ME_ID = tgUser?.id || null;

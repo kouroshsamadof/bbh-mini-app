@@ -1,1 +1,12 @@
-Full member data in the members list: name + username + age + ability + final points + rank; stats bars wired to live DB; court tab reads judgments history from the shared SQLite; members list reads from POST /api/state (initData-authenticated).
+Add snapshot fallback + push snapshot on boot
+
+- refreshState tries the live API first (authenticated initData); if the
+  PC is off the tunnel errors, it falls back to js/snapshot.json (static,
+  synced from the bot DB by the watchdog).
+- Watchdog now writes js/snapshot.json with members/stats/points/abilities
+  on every boot and pushes it; existing snapshot backup matches.
+- Restores Ports API correctness: PC offline still opens the app fully.
+
+Sync architecture: on every logon, watchdog -> start API -> open tunnel ->
+rewrite snapshot.json -> git commit+push -> Pages deploys -> /menubar button
+always opens a live or synced app.
