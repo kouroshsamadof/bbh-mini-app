@@ -41,43 +41,53 @@ const STAT_META = {
   retardness: { en: 'RETARDNESS', emoji: '🐢' },
 };
 
-/* ---------------------------------------------------------- وضعیت (localStorage) */
-const STORAGE_KEY = 'bbh_mini_state_v2';
-const state = (() => {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
-  catch (e) { return {}; }
-})();
-/* عضو‌ها از این پس صفر تا ابد هستند تا خودت بسازی‌شان. */
-/* پاک‌سازی کش قدیمیِ داده‌های نمایشی (v1) */
-try { localStorage.removeItem('bbh_mini_state_v1'); } catch (e) { /* ok */ }
-if (!Array.isArray(state.members)) state.members = [];
-const saveState = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+/* ---------------------------------------------------------- وضعیت (اتصال زنده به دیتابیس ربات اصلی) */
+const API_BASE = (window.BBH_API_BASE || '').replace(/\/+$/, '');
+const tgUser = tg?.initDataUnsafe?.user || null;
+
+const apiCall = async (path, opts = {}) => {
+  if (!API_BASE) return null;
+  try {
+    const res = await fetch(API_BASE + path, {
+      ...opts,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Init-Data': tg?.initData || '',
+        ...(opts.headers || {}),
+      },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) { return null; }
+};
+
+/* اعضا از دیتابیس زنده‌ی ربات اصلی می‌آیند؛ در صورت قطع سرور، لیست خالی نمایش داده می‌شود */
+const state = { members: [], meId: null, judgments: [] };
+
+async function refreshState() {
+  const data = await apiCall('/api/state');
+  if (!data) return false;
+  state.members = (data.members || []).map(m => ({
+    id: m.id,
+    name: m.name,
+    age: m.age,
+    ability: m.ability || '',
+    plus: m.plus || 0,
+    warn: m.warn || 0,
+    strike: m.strike || 0,
+    stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+    final: m.final ?? 0,
+    createdAt: new Date().toISOString(),
+  }));
+  state.meId = ME_ID;  // همان مقدار اولیه (const ME_ID = tgUser?.id || null)
+  return true;
+}
 
 const MEMBERS = state.members;
-const STAT = () => ({ iq: 0, comedy: 0, simp: 0, retardness: 0 });
-
-/* کاربر جاری از تلگرام (اگر داخل تلگرام است) */
-const tgUser = tg?.initDataUnsafe?.user || null;
-const ME_ID = state.meId || null;
+const ME_ID = tgUser?.id || null;
 const MY_MEMBER = () => MEMBERS.find(m => m.id === ME_ID) || null;
 
-const createMember = (name, { age = null, ability = '' } = {}) => ({
-  id: Date.now() + Math.floor(Math.random() * 1000),
-  name: String(name).trim(),
-  age,
-  ability,
-  plus: 0, warn: 0, strike: 0,
-  stats: STAT(),
-  createdAt: new Date().toISOString(),
-});
-
-const finalOf = m => {
-  const sErased = Math.min(m.strike, Math.floor(m.plus / 5));
-  const rem = m.plus - sErased * 5;
-  const wErased = Math.min(m.warn, Math.floor(rem / 3));
-  const remNeg = (m.strike - sErased) * 3 + (m.warn - wErased) * 1;
-  return m.plus - remNeg;
-};
+const finalOf = m => m.final ?? 0;
 
 const AVATAR_COLORS = ['#2f8f5b', '#b45309', '#1d4ed8', '#7c3aed', '#db2777', '#0e7490', '#a16207', '#15803d'];
 const colorFor = id => AVATAR_COLORS[Math.abs(Number(id) || 0) % AVATAR_COLORS.length];
@@ -211,12 +221,18 @@ function saveAbility() {
   const input = $('#abilityInput');
   const text = input.value.trim().replace(/\s+/g, ' ').slice(0, 48);
   if (text.length < 2) { $('#abilityNote').textContent = '❌ توانایی باید بین ۲ تا ۴۸ نویسه باشد.'; return; }
-  me.ability = text;
-  saveState();
-  haptic('light');
-  $('#abilityNote').textContent = `🌟 ثبت شد: «${text}»`;
-  renderStats();
-  renderHome();
+  $('#abilityNote').textContent = '⏳ در حال ثبت…';
+  apiCall('/api/ability', {
+    method: 'POST',
+    body: JSON.stringify({ ability: text }),
+  }).then(res => {
+    if (!res) { $('#abilityNote').textContent = '❌ اتصال سرور قطع شد؛ دوباره تلاش کن.'; return; }
+    me.ability = text;
+    haptic('light');
+    $('#abilityNote').textContent = `🌟 ثبت شد: «${text}»`;
+    renderStats();
+    renderHome();
+  });
 }
 
 /* ---------------------------------------------------------- رتبه‌بندی */
@@ -272,15 +288,13 @@ function renderMembers() {
   $('#memberCount').textContent = toFa(MEMBERS.length) + ' نفر';
   const signupHtml = `
     <div class="signup-box">
-      <div class="signup-title">✍️ افزودن یا ثبت‌نام عضو برادری BBH</div>
-      <div class="signup-sub">نام را بنویس — آمار و امتیاز همه از صفر شروع می‌شود.</div>
+      <div class="signup-title">✍️ ثبت‌نام در برادری BBH</div>
+      <div class="signup-sub">نام را بنویس — آمار و امتیاز شما از صفر شروع می‌شود.</div>
       <div class="ability-row">
         <textarea id="signupName" class="soft-field" maxlength="60" rows="1" placeholder="نام و نام‌خانوادگی" autocomplete="off"></textarea>
         <button class="btn primary" id="signupMeBtn">شروع با خودم</button>
       </div>
-      <div class="signup-sub" style="margin:10px 0 6px">یا بگو یک عضو دیگر اضافه شود:</div>
-      <button class="btn ghost" id="addMemberBtn" style="width:100%">➕ افزودن «همان نام» به‌عنوان عضو</button>
-      <div class="signup-hint">«شروع با خودم» = خودت عضو می‌شوی · «افزودن عضو» = فقط یک حساب جدید ساخته می‌شود</div>
+      <div class="signup-hint">اعضای جدید از خودشان ثبت‌نام می‌کنند؛ افزودنِ دیگران فقط با دستور /addmember در ربات اصلی انجام می‌شود.</div>
     </div>`;
 
   $('#membersList').innerHTML = MEMBERS.length === 0
@@ -296,9 +310,7 @@ function renderMembers() {
       }).join('');
 
   const meBtn = $('#signupMeBtn');
-  const addBtn = $('#addMemberBtn');
   if (meBtn) meBtn.addEventListener('click', () => doSignup(true));
-  if (addBtn) addBtn.addEventListener('click', () => doSignup(false));
   const input = $('#signupName');
   if (input) {
     input.addEventListener('keydown', e => {
@@ -308,29 +320,17 @@ function renderMembers() {
   }
 }
 
-const ME_SET_SELF = m => {
-  state.meId = m.id;
-  saveState();
-  haptic('medium');
-  showToast('✓ شما از قبل عضو هستید');
-  renderAll();
-};
-
-function doSignup(asSelf) {
+async function doSignup(asSelf = true) {
+  if (!asSelf) { showToast('❌ افزودنِ دیگران از اپ انجام نمی‌شود؛ با دستور /addmember در ربات اصلی عضو می‌شوند.'); return; }
   const input = $('#signupName');
   const name = (input?.value || '').trim().split('\n')[0].slice(0, 60);
   if (name.length < 2) { showToast('❌ نام باید حداقل ۲ نویسه باشد'); return; }
-  const exists = MEMBERS.find(m => m.name === name);
-  if (exists) {
-    if (asSelf) { ME_SET_SELF(exists); } else { showToast('❌ این نام قبلاً اضافه شده'); }
-    return;
-  }
-  const member = createMember(name, { ability: '' });
-  MEMBERS.push(member);
-  if (asSelf) state.meId = member.id;
-  saveState();
+  showToast('⏳ در حال ثبت‌نام…');
+  const res = await apiCall('/api/register', { method: 'POST', body: JSON.stringify({ name }) });
+  if (!res) { showToast('❌ اتصال سرور قطع شد؛ دوباره تلاش کن.'); return; }
   haptic('heavy');
-  showToast(asSelf ? '🎉 ثبت‌نام شما انجام شد!' : `✓ «${member.name}» به اعضا اضافه شد`);
+  showToast('🎉 ثبت‌نام شما انجام شد!');
+  await refreshState();
   renderAll();
 }
 
@@ -344,7 +344,7 @@ function renderAll() {
 }
 
 /* ---------------------------------------------------------- راه‌اندازی ------------------------------------------------------ */
-function init() {
+async function init() {
   try {
     tg?.ready?.();
     tg?.expand?.();
@@ -357,6 +357,10 @@ function init() {
     if (tp.button_text_color) document.documentElement.style.setProperty('--tg-theme-button-text-color', tp.button_text_color);
   } catch (e) { /* اجرا در خارج از تلگرام هم ممکن است */ }
 
+  // دیتابیس واقعی از سرور مشترک ربات اصلی خوانده می‌شود
+  const online = await refreshState();
+  const bar = document.getElementById('offlineBar');
+  if (bar) bar.style.display = online ? 'none' : 'block';
   updateTopBar();
   renderAll();
 
