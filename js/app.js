@@ -64,28 +64,32 @@ const apiCall = async (path, opts = {}) => {
 /* اعضا از دیتابیس زنده‌ی ربات اصلی می‌آیند؛ در صورت قطع سرور، لیست خالی نمایش داده می‌شود */
 const state = { members: [], meId: null, judgments: [] };
 
-async function refreshState() {
+const refreshState = async () => {
   const data = await apiCall('/api/state');
   if (!data) return false;
-  state.members = (data.members || []).map(m => ({
-    id: m.id,
-    name: m.name,
-    age: m.age,
-    ability: m.ability || '',
-    plus: m.plus || 0,
-    warn: m.warn || 0,
-    strike: m.strike || 0,
-    stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
-    final: m.final ?? 0,
-    createdAt: new Date().toISOString(),
-  }));
-  state.meId = ME_ID;  // همان مقدار اولیه (const ME_ID = tgUser?.id || null)
+  state.members.length = 0;
+  for (const m of (data.members || [])) {
+    state.members.push({
+      id: m.id,
+      username: m.username || null,
+      name: m.name,
+      age: m.age ?? null,
+      ability: m.ability || '',
+      plus: m.plus || 0,
+      warn: m.warn || 0,
+      strike: m.strike || 0,
+      stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+      final: m.final ?? 0,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  state.judgments = Array.isArray(data.history) ? data.history : [];
   return true;
-}
+};
 
 const MEMBERS = state.members;
 const ME_ID = tgUser?.id || null;
-const MY_MEMBER = () => MEMBERS.find(m => m.id === ME_ID) || null;
+const MY_MEMBER = () => MEMBERS().find(m => m.id === ME_ID) || null;
 
 const finalOf = m => m.final ?? 0;
 
@@ -192,13 +196,15 @@ function renderStats() {
            <span class="ability-text">توانایی‌ات را بنویس — همیشه خط اول آمارت می‌شود.</span>`)
     : `<span class="ability-text">ابتدا از تب «اعضا» ثبت‌نام کن.</span>`;
 
+  const myStats = me?.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
   $('#statsBars').innerHTML = STAT_KEYS.map(k => {
     const meta = STAT_META[k];
+    const v = myStats[k] ?? 0;
     const colorClass = { iq: '', comedy: 'gold', simp: 'pink', retardness: 'red' }[k] || '';
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
-      <div class="bar-track"><div class="bar-fill ${colorClass}" data-fill="0" style="width:0%"></div></div>
-      <div class="bar-value">${toFa(0)}٪</div>
+      <div class="bar-track"><div class="bar-fill ${colorClass}" data-fill="${v}" style="width:${v}%"></div></div>
+      <div class="bar-value">${toFa(v)}٪</div>
     </div>`;
   }).join('');
 
@@ -277,10 +283,31 @@ function renderRankings() {
 
 /* ---------------------------------------------------------- دادگاه */
 function renderCourt() {
-  $('#courtOpen').innerHTML =
-    `<div class="empty-state">⚖️ هیچ پرونده‌ی بازی وجود ندارد.<br/>این بخش، وقتی شکایت‌ها ثبت شوند، اجرا می‌شود.</div>`;
-  $('#courtHistory').innerHTML =
-    `<div class="empty-state">📜 هیچ تاریخچه‌ای ثبت نشده است.</div>`;
+  const open = state.judgments.filter(j => j.status !== 'closed');
+  const history = state.judgments.filter(j => j.status === 'closed');
+
+  $('#courtOpen').innerHTML = open.length === 0
+    ? `<div class="empty-state">⚖️ هیچ پرونده‌ی بازی وجود ندارد.<br/>این بخش بعد از ثبت اولین شکایت فعال می‌شود.</div>`
+    : open.map(j => `
+      <div class="case">
+        <div class="case-head">
+          <div class="case-target">⚖️ ${escapeHtml(j.target_name || '—')}</div>
+          <span class="verdict-badge strike">در جریان</span>
+        </div>
+        <div class="case-reason">💬 ${escapeHtml(j.reason || '—')} · 👮 ${escapeHtml(j.admin_name || '—')}</div>
+      </div>
+    `).join('');
+
+  $('#courtHistory').innerHTML = history.length === 0
+    ? `<div class="empty-state">📜 هیچ تاریخچه‌ی دادگاهی ثبت نشده است.</div>`
+    : history.map(j => {
+        const won = j.winner === 'strike' ? '🔨 استرایک' : (j.winner === 'chance' ? '🟩 فرصت دیگر' : '—');
+        const when = escapeHtml((j.created_at || '').slice(0, 10) || '—');
+        return `<div class="history-item">
+          <span>${escapeHtml(j.target_name || '—')} <small style="color:var(--muted)">(${when})</small></span>
+          <span class="history-winner" style="color:${j.winner === 'strike' ? '#d6403c' : '#2f8f5b'}">${won}</span>
+        </div>`;
+      }).join('');
 }
 
 /* ---------------------------------------------------------- اعضا + افزودن عضو */
@@ -297,14 +324,25 @@ function renderMembers() {
       <div class="signup-hint">اعضای جدید از خودشان ثبت‌نام می‌کنند؛ افزودنِ دیگران فقط با دستور /addmember در ربات اصلی انجام می‌شود.</div>
     </div>`;
 
+  const avatar = (name, id, size) => {
+    const ch = (name || '؟').charAt(0);
+    return `<div class="rank-avatar" style="width:${size}px;height:${size}px;background:${colorFor(id)};font-size:${Math.floor(size / 2)}px">${ch}</div>`;
+  };
+  const fmtAge = age => age != null ? `<span class="member-age">${toFa(age)} سال</span>` : '';
+  const fmtAbility = a => a ? `<span class="member-ability">🌟 ${escapeHtml(a)}</span>` : '';
+
   $('#membersList').innerHTML = MEMBERS.length === 0
     ? signupHtml + `<div class="empty-state">👥 هنوز هیچ عضوی اضافه نکرده‌ای — اولین نفر باش!</div>`
     : signupHtml + [...MEMBERS].sort((a, b) => finalOf(b) - finalOf(a)).map(m => {
         const f = finalOf(m), sign = f >= 0 ? '+' : '';
         const mine = m.id === ME_ID ? ' <span class="you-badge">(شما)</span>' : '';
+        const userTag = m.username ? `<span class="member-user">@${escapeHtml(m.username)}</span>` : '';
         return `<div class="member-row">
-          ${avatarHtml(m.name, m.id, 40)}
-          <div class="member-name">${escapeHtml(m.name)}${mine}</div>
+          ${avatar(m.name, m.id, 40)}
+          <div class="member-body">
+            <div class="member-name">${escapeHtml(m.name)}${mine} ${userTag}</div>
+            <div class="member-sub">${fmtAge(m.age)} ${fmtAbility(m.ability)}</div>
+          </div>
           <div class="member-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
         </div>`;
       }).join('');

@@ -1,0 +1,1 @@
+Full member data in the members list: name + username + age + ability + final points + rank; stats bars wired to live DB; court tab reads judgments history from the shared SQLite; members list reads from POST /api/state (initData-authenticated).
