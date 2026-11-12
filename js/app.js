@@ -36,8 +36,9 @@ const state = (() => {
   catch (e) { return {}; }
 })();
 /* عضو‌ها از این پس صفر تا ابد هستند تا خودت بسازی‌شان. */
+/* پاک‌سازی کش قدیمیِ داده‌های نمایشی (v1) */
+try { localStorage.removeItem('bbh_mini_state_v1'); } catch (e) { /* ok */ }
 if (!Array.isArray(state.members)) state.members = [];
-if (!state.votes) state.votes = {};
 const saveState = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 
 const MEMBERS = state.members;
@@ -239,44 +240,11 @@ function renderRankings() {
 }
 
 /* ---------------------------------------------------------- دادگاه */
-const COURT_OPEN = [
-  { id: 'c1', target: 'در انتظار نخستین شکایت!', reason: 'هنوز عضو دخیل نشده است', officer: 'سیستم BBH', strike: 0, chance: 0, color: '#b45309' },
-];
-
 function renderCourt() {
-  $('#courtOpen').innerHTML = MEMBERS.length === 0
-    ? `<div class="empty-state">⚖️ هیچ پرونده‌ی باز‌ای نیست.<br/>وقتی اعضا را اضافه کردی، دادگاه‌ها اینجا دیده می‌شوند.</div>`
-    : COURT_OPEN.map(c => {
-        const myVote = state.votes[c.id];
-        const strikeCount = c.strike + (myVote === 'strike' ? 1 : 0);
-        const chanceCount = c.chance + (myVote === 'chance' ? 1 : 0);
-        return `<div class="case" data-case="${c.id}">
-          <div class="case-head">
-            <div class="case-target">⚖️ ${escapeHtml(c.target)}</div>
-            <span class="verdict-badge strike">در جریان</span>
-          </div>
-          <div class="case-reason">💬 ${escapeHtml(c.reason)} · 👮 ${escapeHtml(c.officer)}</div>
-          <div class="case-votes">
-            <div><div class="vote-count strike">${toFa(strikeCount)}</div><div class="vote-label">🟥 استرایک بزنید</div></div>
-            <div><div class="vote-count chance">${toFa(chanceCount)}</div><div class="vote-label">🟩 یک فرصت دیگر</div></div>
-          </div>
-          <div class="vote-buttons">
-            <button class="vote-btn strike ${myVote === 'strike' ? 'picked' : ''}" data-vote="strike" data-case="${c.id}">🟥 استرایک بزنید</button>
-            <button class="vote-btn chance ${myVote === 'chance' ? 'picked' : ''}" data-vote="chance" data-case="${c.id}">🟩 فرصت دیگر</button>
-          </div>
-          <div class="case-footer"><span>⏱ رأی‌گیری باز است</span><span>رای شما: ${myVote ? (myVote === 'strike' ? '🟥 استرایک' : '🟩 فرصت دیگر') : '—'}</span></div>
-        </div>`;
-      }).join('');
-
-  $('#courtHistory').innerHTML = `<div class="empty-state">📜 تاریخچه خالی است — چون هنوز پرونده بسته‌ای ثبت نشده.</div>`;
-}
-
-function castVote(caseId, vote) {
-  state.votes[caseId] = vote;
-  saveState();
-  haptic('medium');
-  renderCourt();
-  showToast(vote === 'strike' ? '🟥 رأی شما ثبت شد' : '🟩 رأی شما ثبت شد');
+  $('#courtOpen').innerHTML =
+    `<div class="empty-state">⚖️ هیچ پرونده‌ی بازی وجود ندارد.<br/>این بخش، وقتی شکایت‌ها ثبت شوند، اجرا می‌شود.</div>`;
+  $('#courtHistory').innerHTML =
+    `<div class="empty-state">📜 هیچ تاریخچه‌ای ثبت نشده است.</div>`;
 }
 
 /* ---------------------------------------------------------- اعضا + افزودن عضو */
@@ -379,12 +347,6 @@ function init() {
 
   $('#saveAbilityBtn').addEventListener('click', saveAbility);
   $('#abilityInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveAbility(); });
-
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('.vote-btn');
-    if (!btn) return;
-    castVote(btn.dataset.case, btn.dataset.vote);
-  });
 }
 
 document.addEventListener('DOMContentLoaded', init);
