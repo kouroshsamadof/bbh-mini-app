@@ -21,6 +21,18 @@ function showToast(text) {
 
 const haptic = kind => { try { tg?.HapticFeedback?.impactOccurred?.(kind || 'medium'); } catch (e) { /* ok */ } };
 
+/* فیلد متنِ نرم — خودکار رشد می‌کند و با تمرکز، درخشش می‌گیرد */
+const softField = el => {
+  if (!el) return;
+  const grow = () => {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 220) + 'px';
+  };
+  el.addEventListener('input', grow, { passive: true });
+  el.addEventListener('focus', grow);
+  grow();
+};
+
 const STAT_KEYS = ['iq', 'comedy', 'simp', 'retardness'];
 const STAT_META = {
   iq:         { en: 'IQ',         emoji: '💡' },
@@ -183,13 +195,21 @@ function renderStats() {
   $('#abilityInput').value = ability || '';
   $('#abilityInput').disabled = !me;
   $('#saveAbilityBtn').disabled = !me;
+  updateAbilityCounter();
+  softField($('#abilityInput'));
 }
+
+const updateAbilityCounter = () => {
+  const v = ($('#abilityInput') && $('#abilityInput').value) || '';
+  const el = $('#abilityCounter');
+  if (el) el.textContent = `${toFa(v.length)} / ۴۸`;
+};
 
 function saveAbility() {
   const me = MY_MEMBER();
   if (!me) { $('#abilityNote').textContent = '❌ اول باید ثبت‌نام کنی.'; return; }
   const input = $('#abilityInput');
-  const text = input.value.trim().split('\n')[0].slice(0, 48);
+  const text = input.value.trim().replace(/\s+/g, ' ').slice(0, 48);
   if (text.length < 2) { $('#abilityNote').textContent = '❌ توانایی باید بین ۲ تا ۴۸ نویسه باشد.'; return; }
   me.ability = text;
   saveState();
@@ -255,7 +275,7 @@ function renderMembers() {
       <div class="signup-title">✍️ افزودن یا ثبت‌نام عضو برادری BBH</div>
       <div class="signup-sub">نام را بنویس — آمار و امتیاز همه از صفر شروع می‌شود.</div>
       <div class="ability-row">
-        <input type="text" id="signupName" maxlength="60" placeholder="نام و نام‌خانوادگی" autocomplete="off" />
+        <textarea id="signupName" class="soft-field" maxlength="60" rows="1" placeholder="نام و نام‌خانوادگی" autocomplete="off"></textarea>
         <button class="btn primary" id="signupMeBtn">شروع با خودم</button>
       </div>
       <div class="signup-sub" style="margin:10px 0 6px">یا بگو یک عضو دیگر اضافه شود:</div>
@@ -280,7 +300,12 @@ function renderMembers() {
   if (meBtn) meBtn.addEventListener('click', () => doSignup(true));
   if (addBtn) addBtn.addEventListener('click', () => doSignup(false));
   const input = $('#signupName');
-  if (input) input.addEventListener('keydown', e => { if (e.key === 'Enter') doSignup(true); });
+  if (input) {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSignup(true); }
+    });
+    softField(input);
+  }
 }
 
 const ME_SET_SELF = m => {
@@ -346,7 +371,10 @@ function init() {
   }));
 
   $('#saveAbilityBtn').addEventListener('click', saveAbility);
-  $('#abilityInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveAbility(); });
+  $('#abilityInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveAbility(); }
+  });
+  $('#abilityInput').addEventListener('input', updateAbilityCounter, { passive: true });
 }
 
 document.addEventListener('DOMContentLoaded', init);
