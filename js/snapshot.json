@@ -46,7 +46,7 @@
 "warn": 0,
 "strike": 0,
 "final": 0,
-"ability": "BENEFIT",
+"ability": null,
 "stats": {
 "iq": 0,
 "comedy": 0,
@@ -109,5 +109,5 @@
 }
 }
 ],
-"syncedAt": "2026-11-12T21:30:05"
+"syncedAt": "2026-11-12T21:41:27"
 }
