@@ -1,7 +1,7 @@
-Fix buttons unresponsive on slow networks
+Dual-mode signup: full in-Telegram auth, local mode everywhere else
 
-Event listeners were wired after the async refreshState() call, so any
-network/tunnel hiccup caused init() to reject silently and none of the
-buttons (nav, sign-up, ability save, tabs) ever attached. Now bindEvents()
-runs before the data fetch – buttons work even if the API is down.
-Added safeRenderAll() fallback so rendering errors still leave a working UI.
+- Fix ME_ID TypeError (const ME_ID vs tgUser access outside Telegram)
+- Local mode stores members + meId in localStorage so anyone can sign up from any browser/launcher; snapshot.json remains the fallback roster on launch
+- Telegram mode remains fully synced with the shared DB via bot-validated initData
+- Offline bar only shown when Telegram API is unreachable; for browser-only users local state is authoritative
+- renderMembers called after ability save so member list reflects writes

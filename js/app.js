@@ -41,18 +41,26 @@ const STAT_META = {
   retardness: { en: 'RETARDNESS', emoji: '🐢' },
 };
 
-/* ---------------------------------------------------------- وضعیت (اتصال زنده به دیتابیس ربات اصلی) */
+/* ---------------------------------------------------------- وضعیت — دو حالته: زنده (داخل تلگرام) یا محلی */
 const API_BASE = (window.BBH_API_BASE || '').replace(/\/+$/, '');
 const tgUser = tg?.initDataUnsafe?.user || null;
+const IN_TELEGRAM = !!tg && !!tg.initData && API_BASE;  // true = فقط داخل اپ
+const LOCAL_KEY = 'bbh_mini_local_v3';
+
+const loadLocalState = () => {
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || null; } catch (e) { return null; }
+};
+const saveLocalState = (s) => { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
+const defaultLocalState = () => ({ members: [], meId: null, judgments: [] });
 
 const apiCall = async (path, opts = {}) => {
-  if (!API_BASE) return null;
+  if (!IN_TELEGRAM) return null;
   try {
     const res = await fetch(API_BASE + path, {
       ...opts,
       headers: {
         'Content-Type': 'application/json',
-        'X-Init-Data': tg?.initData || '',
+        'X-Init-Data': tg.initData,
         ...(opts.headers || {}),
       },
     });
@@ -61,63 +69,56 @@ const apiCall = async (path, opts = {}) => {
   } catch (e) { return null; }
 };
 
-/* اعضا از دیتابیس زنده‌ی ربات اصلی می‌آیند؛ در صورت قطع سرور، لیست خالی نمایش داده می‌شود */
-const state = { members: [], meId: null, judgments: [] };
+const state = loadLocalState() || defaultLocalState();
+
+const applyMembers = list => {
+  state.members.length = 0;
+  for (const m of list) {
+    state.members.push({
+      id: m.id, username: m.username || null, name: m.name,
+      age: m.age ?? null, ability: m.ability || '',
+      plus: m.plus || 0, warn: m.warn || 0, strike: m.strike || 0,
+      stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+      final: m.final ?? 0, createdAt: m.createdAt || new Date().toISOString(),
+    });
+  }
+  saveLocalState(state);
+};
 
 async function refreshState() {
-  const statePath = '/api/state';
-  // اگر داخل تلگرام هستیم، از دیتابیس زنده بخوانیم
-  try {
-    const res = await apiCall(statePath);
+  // حالت زنده — داخل تلگرام
+  if (IN_TELEGRAM) {
+    const res = await apiCall('/api/state');
     if (res && Array.isArray(res.members) && res.members.length > 0) {
-      state.members.length = 0;
-      for (const m of res.members) {
-        state.members.push({
-          id: m.id,
-          username: m.username || null,
-          name: m.name,
-          age: m.age ?? null,
-          ability: m.ability || '',
-          plus: m.plus || 0,
-          warn: m.warn || 0,
-          strike: m.strike || 0,
-          stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
-          final: m.final ?? 0,
-          createdAt: new Date().toISOString(),
-        });
-      }
+      applyMembers(res.members);
       state.judgments = Array.isArray(res.history) ? res.history : [];
+      saveLocalState(state);
       return true;
     }
-  } catch (e) { /* اتصال ناموفق — به اسنپ‌شات برمیگردیم */ }
-  // Fallback: اسنپ‌شات ایستا
+    // اتصال ناموفق — به اسنپ‌شات Pages کوچ بده
+    try {
+      const snap = await fetch('js/snapshot.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+      if (snap && Array.isArray(snap.members)) {
+        applyMembers(snap.members);
+        return true;
+      }
+    } catch (e) { /* snapshot هم نشد */ }
+    return false;
+  }
+  // حالت محلی — خارج تلگرام
   try {
     const snap = await fetch('js/snapshot.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
-    if (!snap || !Array.isArray(snap.members)) return false;
-    state.members.length = 0;
-    for (const m of snap.members) {
-      state.members.push({
-        id: m.id,
-        username: m.username || null,
-        name: m.name,
-        age: m.age ?? null,
-        ability: m.ability || '',
-        plus: m.plus || 0,
-        warn: m.warn || 0,
-        strike: m.strike || 0,
-        stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
-        final: m.final ?? 0,
-        createdAt: snap.syncedAt || new Date().toISOString(),
-      });
+    if (snap && Array.isArray(snap.members)) {
+      applyMembers(snap.members);
+      return true;
     }
-    state.judgments = [];
-    return true;
-  } catch (e) { return false; }
+  } catch (e) { /* snapshot هم در دسترس نیست */ }
+  return state.members.length > 0;
 }
 
 const MEMBERS = state.members;
-const ME_ID = tgUser?.id || null;
-const MY_MEMBER = () => MEMBERS().find(m => m.id === ME_ID) || null;
+const ME_ID = IN_TELEGRAM ? (tgUser?.id || null) : (state.meId || null);
+const MY_MEMBER = () => MEMBERS.find(m => m.id === ME_ID) || null;
 
 const finalOf = m => m.final ?? 0;
 
@@ -249,24 +250,35 @@ const updateAbilityCounter = () => {
   if (el) el.textContent = `${toFa(v.length)} / ۴۸`;
 };
 
-function saveAbility() {
+async function saveAbility() {
   const me = MY_MEMBER();
   if (!me) { $('#abilityNote').textContent = '❌ اول باید ثبت‌نام کنی.'; return; }
   const input = $('#abilityInput');
   const text = input.value.trim().replace(/\s+/g, ' ').slice(0, 48);
   if (text.length < 2) { $('#abilityNote').textContent = '❌ توانایی باید بین ۲ تا ۴۸ نویسه باشد.'; return; }
   $('#abilityNote').textContent = '⏳ در حال ثبت…';
-  apiCall('/api/ability', {
-    method: 'POST',
-    body: JSON.stringify({ ability: text }),
-  }).then(res => {
-    if (!res) { $('#abilityNote').textContent = '❌ اتصال سرور قطع شد؛ دوباره تلاش کن.'; return; }
+
+  if (IN_TELEGRAM) {
+    const res = await apiCall('/api/ability', { method: 'POST', body: JSON.stringify({ ability: text }) });
+    if (!res) { $('#abilityNote').textContent = '❌ ثبت نشد — دوباره تلاش کن.'; return; }
     me.ability = text;
-    haptic('light');
-    $('#abilityNote').textContent = `🌟 ثبت شد: «${text}»`;
-    renderStats();
-    renderHome();
-  });
+    setMeInList(me);
+  } else {
+    // حالت محلی بدون نیاز به سرور
+    me.ability = text;
+    saveLocalState(state);
+  }
+  haptic('light');
+  $('#abilityNote').textContent = `🌟 ثبت شد: «${text}»`;
+  renderStats();
+  renderHome();
+  renderMembers();
+}
+
+function setMeInList(me) {
+  const i = MEMBERS.findIndex(x => x.id === me.id);
+  if (i >= 0) MEMBERS[i] = { ...MEMBERS[i], ability: me.ability };
+  saveLocalState(state);
 }
 
 /* ---------------------------------------------------------- رتبه‌بندی */
@@ -392,11 +404,35 @@ async function doSignup(asSelf = true) {
   const name = (input?.value || '').trim().split('\n')[0].slice(0, 60);
   if (name.length < 2) { showToast('❌ نام باید حداقل ۲ نویسه باشد'); return; }
   showToast('⏳ در حال ثبت‌نام…');
-  const res = await apiCall('/api/register', { method: 'POST', body: JSON.stringify({ name }) });
-  if (!res) { showToast('❌ اتصال سرور قطع شد؛ دوباره تلاش کن.'); return; }
-  haptic('heavy');
+
+  if (IN_TELEGRAM) {
+    const res = await apiCall('/api/register', { method: 'POST', body: JSON.stringify({ name }) });
+    if (!res) { showToast('❌ ثبت‌نام انجام نشد؛ دوباره تلاش کن.'); return; }
+    showToast('🎉 ثبت‌نام شما انجام شد!');
+    await refreshState();
+    renderAll();
+    return;
+  }
+
+  // حالت محلی (بدون ربات) — روی این دستگاه ذخیره می‌شود
+  const existing = MEMBERS.find(m => m.name === name);
+  if (existing) {
+    state.meId = existing.id;
+    saveLocalState(state);
+    showToast('✓ شما از قبل عضو هستید');
+    renderAll();
+    return;
+  }
+  const newId = Date.now() + Math.floor(Math.random() * 1000);
+  const zero = { iq: 0, comedy: 0, simp: 0, retardness: 0 };
+  MEMBERS.push({
+    id: newId, username: tgUser?.username ?? null, name, age: null, ability: '',
+    plus: 0, warn: 0, strike: 0, stats: zero, final: 0,
+    createdAt: new Date().toISOString(),
+  });
+  state.meId = newId;
+  saveLocalState(state);
   showToast('🎉 ثبت‌نام شما انجام شد!');
-  await refreshState();
   renderAll();
 }
 
@@ -446,15 +482,15 @@ async function init() {
   bindEvents();
 
   // دیتابیس واقعی از سرور مشترک ربات اصلی خوانده می‌شود
+  let online = false;
   try {
-    const online = await refreshState();
-    const bar = document.getElementById('offlineBar');
-    if (bar) bar.style.display = online ? 'none' : 'block';
+    online = await refreshState();
   } catch (e) {
     console.error('refreshState failed:', e);
-    const bar = document.getElementById('offlineBar');
-    if (bar) bar.style.display = 'block';
+    online = false;
   }
+  const bar = document.getElementById('offlineBar');
+  if (bar) bar.style.display = IN_TELEGRAM && !online ? 'block' : 'none';
 
   updateTopBar();
   safeRenderAll();
