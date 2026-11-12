@@ -1,0 +1,8 @@
+AZIZ MINI — Telegram Mini App (Persian, virtual BBH panel)
+
+- Home dashboard: final points, rank preview, stats preview
+- Personal stats (IQ/COMEDY/SIMPNESS/RETARDNESS) with animated bars
+- Personal ability (own text, first line of stats, always 100%)
+- Dual leaderboards (points and average stats)
+- Justice court voting UI with verdict history
+- Members list, Persian RTL UI, Telegram theme-aware, haptic feedback

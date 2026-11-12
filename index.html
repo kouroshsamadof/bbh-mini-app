@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>AZIZ MINI — پنل برادری BBH</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏆</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- سربرگ -->
+  <header class="topbar">
+    <div class="user-chip">
+      <div class="avatar" id="topAvatar">؟</div>
+      <div class="user-meta">
+        <div class="user-name" id="topName">عضو برادری</div>
+        <div class="user-rank" id="topRank">رتبه: —</div>
+      </div>
+    </div>
+    <div class="plus-chip" title="امتیاز مثبت‌های شما">
+      <span class="plus-num" id="topPlus">۰</span>
+      <small> پلاس</small>
+    </div>
+  </header>
+
+  <!-- صفحات -->
+  <main id="screens">
+
+    <!-- خانه -->
+    <section class="screen active" id="screen-home">
+      <div class="hero-card">
+        <div class="hero-badge">🏅 برادری BBH</div>
+        <h1 class="hero-title">پنل امتیاز اعضا</h1>
+        <p class="hero-sub">همان آمار و دادگاه و رتبه‌بندی ربات — این‌جا بدون تایپ، با دکمه‌ها.</p>
+      </div>
+
+      <div class="points-card">
+        <div class="points-score">
+          <div class="score-num" id="heroFinal">+۰</div>
+          <div class="score-label">امتیاز نهایی شما</div>
+        </div>
+        <div class="points-breakdown">
+          <div class="pb-item"><span class="pb-ic green">🟢</span><b id="heroPlus">۰</b><small>پلاس</small></div>
+          <div class="pb-item"><span class="pb-ic yellow">🟡</span><b id="heroWarn">۰</b><small>اخطار</small></div>
+          <div class="pb-item"><span class="pb-ic red">🔴</span><b id="heroStrike">۰</b><small>استرایک</small></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>🥇 رتبه‌ی شما</h2>
+          <button class="link-btn" data-nav="rankings">همه‌ی جدول ›</button>
+        </div>
+        <div class="rank-preview" id="homeRankPreview"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>📊 پیش‌نمایش آمار</h2>
+          <button class="link-btn" data-nav="stats">جزئیات و توانایی ›</button>
+        </div>
+        <div id="homeStatsPreview" class="stat-preview"></div>
+      </div>
+    </section>
+
+    <!-- آمار -->
+    <section class="screen" id="screen-stats">
+      <div class="card">
+        <div class="card-head">
+          <h2>📊 آمار <b id="statsName">من</b></h2>
+          <span class="chip">۰ تا ۱۰۰</span>
+        </div>
+        <div class="ability-banner" id="abilityBanner"></div>
+        <div class="bar-list" id="statsBars"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>🌟 توانایی شخصی من</h2>
+        </div>
+        <p class="hint">توانایی خودتان را بنویسید؛ همیشه خط اول آمار شما و با نوار ۱۰۰٪ نمایش داده می‌شود.</p>
+        <div class="ability-row">
+          <input type="text" id="abilityInput" maxlength="48" placeholder="مثلاً: کارتر خشم‌آلود" autocomplete="off" />
+          <button class="btn primary" id="saveAbilityBtn">ثبت</button>
+        </div>
+        <div class="save-note" id="abilityNote"></div>
+      </div>
+    </section>
+
+    <!-- رتبه‌بندی -->
+    <section class="screen" id="screen-rankings">
+      <div class="segmented">
+        <button class="seg active" data-rank-tab="points">🏆 امتیاز</button>
+        <button class="seg" data-rank-tab="stats">📈 آمار</button>
+      </div>
+      <div class="rank-list" id="rankingList"></div>
+      <div class="rank-you" id="rankingYou"></div>
+    </section>
+
+    <!-- دادگاه -->
+    <section class="screen" id="screen-court">
+      <div class="card">
+        <div class="card-head">
+          <h2>⚖️ دادگاه‌های باز</h2>
+          <span class="chip live">LIVE</span>
+        </div>
+        <div id="courtOpen"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>📜 تاریخچه‌ی دادگاه‌ها</h2>
+        </div>
+        <div id="courtHistory"></div>
+      </div>
+    </section>
+
+    <!-- اعضا -->
+    <section class="screen" id="screen-members">
+      <div class="card">
+        <div class="card-head">
+          <h2>👥 اعضای برادری</h2>
+          <span class="chip" id="memberCount">۰ نفر</span>
+        </div>
+        <div id="membersList"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- نوار پایین -->
+  <nav class="bottomnav">
+    <button class="nav-btn active" data-screen="home"><span>🏠</span>خانه</button>
+    <button class="nav-btn" data-screen="stats"><span>📊</span>آمار</button>
+    <button class="nav-btn" data-screen="rankings"><span>🏆</span>رتبه‌بندی</button>
+    <button class="nav-btn" data-screen="court"><span>⚖️</span>دادگاه</button>
+    <button class="nav-btn" data-screen="members"><span>👥</span>اعضا</button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
