@@ -1,7 +1,0 @@
-Dual-mode signup: full in-Telegram auth, local mode everywhere else
-
-- Fix ME_ID TypeError (const ME_ID vs tgUser access outside Telegram)
-- Local mode stores members + meId in localStorage so anyone can sign up from any browser/launcher; snapshot.json remains the fallback roster on launch
-- Telegram mode remains fully synced with the shared DB via bot-validated initData
-- Offline bar only shown when Telegram API is unreachable; for browser-only users local state is authoritative
-- renderMembers called after ability save so member list reflects writes
