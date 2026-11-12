@@ -409,7 +409,26 @@ function renderAll() {
   renderMembers();
 }
 
-/* ---------------------------------------------------------- راه‌اندازی ------------------------------------------------------ */
+function bindEvents() {
+  $$('.nav-btn').forEach(btn => btn.addEventListener('click', () => { haptic('light'); showScreen(btn.dataset.screen); }));
+  $$('[data-nav]').forEach(btn => btn.addEventListener('click', () => showScreen(btn.dataset.nav)));
+  $$('.seg[data-rank-tab]').forEach(btn => btn.addEventListener('click', () => {
+    rankTab = btn.dataset.rankTab;
+    $$('.seg[data-rank-tab]').forEach(b => b.classList.toggle('active', b === btn));
+    renderRankings();
+    haptic('light');
+  }));
+  $('#saveAbilityBtn').addEventListener('click', saveAbility);
+  $('#abilityInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveAbility(); }
+  });
+  $('#abilityInput').addEventListener('input', updateAbilityCounter, { passive: true });
+}
+
+function safeRenderAll() {
+  try { renderAll(); } catch (e) { console.error('render failed:', e); }
+}
+
 async function init() {
   try {
     tg?.ready?.();
@@ -421,30 +440,25 @@ async function init() {
     if (tp.hint_color) document.documentElement.style.setProperty('--tg-theme-hint-color', tp.hint_color);
     if (tp.button_color) document.documentElement.style.setProperty('--tg-theme-button-color', tp.button_color);
     if (tp.button_text_color) document.documentElement.style.setProperty('--tg-theme-button-text-color', tp.button_text_color);
-  } catch (e) { /* اجرا در خارج از تلگرام هم ممکن است */ }
+  } catch (e) { /* rendering خارج از تلگرام هم باید کار کند */ }
+
+  // دکمه‌ها را اول از همه روشن کن — حتی اگر سرور قطع باشد، باید کار کنند
+  bindEvents();
 
   // دیتابیس واقعی از سرور مشترک ربات اصلی خوانده می‌شود
-  const online = await refreshState();
-  const bar = document.getElementById('offlineBar');
-  if (bar) bar.style.display = online ? 'none' : 'block';
+  try {
+    const online = await refreshState();
+    const bar = document.getElementById('offlineBar');
+    if (bar) bar.style.display = online ? 'none' : 'block';
+  } catch (e) {
+    console.error('refreshState failed:', e);
+    const bar = document.getElementById('offlineBar');
+    if (bar) bar.style.display = 'block';
+  }
+
   updateTopBar();
-  renderAll();
-
-  $$('.nav-btn').forEach(btn => btn.addEventListener('click', () => { haptic('light'); showScreen(btn.dataset.screen); }));
-  $$('[data-nav]').forEach(btn => btn.addEventListener('click', () => showScreen(btn.dataset.nav)));
-
-  $$('.seg[data-rank-tab]').forEach(btn => btn.addEventListener('click', () => {
-    rankTab = btn.dataset.rankTab;
-    $$('.seg[data-rank-tab]').forEach(b => b.classList.toggle('active', b === btn));
-    renderRankings();
-    haptic('light');
-  }));
-
-  $('#saveAbilityBtn').addEventListener('click', saveAbility);
-  $('#abilityInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveAbility(); }
-  });
-  $('#abilityInput').addEventListener('input', updateAbilityCounter, { passive: true });
+  safeRenderAll();
 }
 
 document.addEventListener('DOMContentLoaded', init);
+window.addEventListener('error', e => console.error('app error:', e.message));
