@@ -8,7 +8,7 @@
 
 ## باز کردن در تلگرام
 
-از منوی ربات **@miniazizbot** دکمه‌ی «پنل BBH» را بزنید (با BotFather تنظیم شده)، یا لینک مستقیم:
+از منوی ربات **@azizmstrikebot** دکمه‌ی «پنل BBH» را بزنید (با BotFather تنظیم شده)، یا لینک مستقیم:
 
 https://kouroshsamadof.github.io/bbh-mini-app/
 
