@@ -1,0 +1,12 @@
+# هیچوقت فایل‌های حساس وارد ایمیج داکر نشوند
+.env
+bot_data.db
+bot_data.db-wal
+bot_data.db-shm
+*.db
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.dockerignore
+backups/

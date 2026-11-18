@@ -1,17 +1,21 @@
-# هیچ فایل حساس محتوای پروژه نباشد
-.env
-*.db
-__pycache__/
+﻿__pycache__/
 .DS_Store
 
 # Server credentials and runtime files
-.env.*
+.env
+.env.local
+.env.*.local
 !.env.example
+backups/
+bot_data.db*
+*.db
+*.db-shm
+*.db-wal
 *.pem
 *.key
 *.sqlite
 *.sqlite3
 data/
-backups/
 .venv/
 venv/
+node_modules/
