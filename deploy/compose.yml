@@ -1,0 +1,31 @@
+# The installed server copy controls the runtime. See deploy/README.md.
+services:
+  bot:
+    image: ${AZIZAM_IMAGE:?The deployment script must select an image}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - /home/arian/azizam/shared/bot.env
+    environment:
+      PORT: "8080"
+      HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:8093:8080"
+    volumes:
+      - bot-data:/data
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bot-data:
+    name: azizam_bot-data

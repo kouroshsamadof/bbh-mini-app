@@ -3,3 +3,15 @@
 *.db
 __pycache__/
 .DS_Store
+
+# Server credentials and runtime files
+.env.*
+!.env.example
+*.pem
+*.key
+*.sqlite
+*.sqlite3
+data/
+backups/
+.venv/
+venv/

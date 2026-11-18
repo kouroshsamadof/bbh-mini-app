@@ -41,3 +41,8 @@ js/app.js      ← داده‌ی نمایشی + منطق رندر + رأی‌گ�
 
 هر تغییری در `js/app.js` را با `node --check js/app.js` بررسی کن، و قبل از push
 از بودن DOM IDها مطمئن شو (`id=`های رفرنس‌شده در JS باید در HTML باشند).
+
+## Server deployment
+
+GitHub Actions and the server handover are described in [deploy/README.md](deploy/README.md).
+The Telegram bot itself must be added before the server can replace Observer.

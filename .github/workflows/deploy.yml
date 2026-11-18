@@ -1,0 +1,67 @@
+name: Deploy Azizam
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azizam-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check Mini App and deployment guards
+        run: |
+          node --check js/app.js
+          node --check js/config.js
+          python3 -m json.tool js/snapshot.json > /dev/null
+          python3 -m unittest discover -s deploy -p 'test_*.py'
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Deploy the exact main commit
+        env:
+          DEPLOY_KEY: ${{ secrets.AZIZAM_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.AZIZAM_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.AZIZAM_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.AZIZAM_DEPLOY_USER }}
+          DEPLOY_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY"
+          test -n "$KNOWN_HOSTS"
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/azizam_key"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/azizam_key"
+          chmod 600 "$HOME/.ssh/azizam_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          ssh -T -i "$HOME/.ssh/azizam_key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "deploy $DEPLOY_SHA" | tee deployment-result.txt
+          {
+            echo '### Azizam server deployment'
+            echo '```text'
+            cat deployment-result.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
