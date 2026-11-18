@@ -116,6 +116,15 @@ class DeploymentSafety(unittest.TestCase):
         self.assertEqual(result.exception.code, 64)
         self.assertEqual(self.commands, [])
 
+    def test_backups_work_without_an_observer_container(self):
+        (self.root / 'current.env').write_text(OLD)
+        with patch.object(d, 'run', return_value='') as run, \
+                patch.object(d, 'inspect_container') as inspect:
+            d.backup_bot_data(self.root)
+        inspect.assert_not_called()
+        self.assertIn(OLD.strip().split('=', 1)[1], run.call_args.args[0])
+        self.assertIn('azizam_bot-data:/source:ro', run.call_args.args[0])
+
 
 if __name__ == '__main__':
     unittest.main()

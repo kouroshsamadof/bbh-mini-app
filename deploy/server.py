@@ -93,9 +93,13 @@ def backup_bot_data(folder):
         run(['docker', 'volume', 'inspect', 'azizam_bot-data'], capture=True)
     except subprocess.CalledProcessError:
         return
-    observer = inspect_container(OBSERVER)
-    if not observer:
-        raise RuntimeError('The retained backup helper image is unavailable.')
+    envfile = ROOT / 'current.env'
+    if not envfile.exists():
+        envfile = ROOT / 'candidate.env'
+    match = re.fullmatch(r'AZIZAM_IMAGE=([a-zA-Z0-9:/._-]+)\n?', envfile.read_text())
+    if not match:
+        raise RuntimeError('A valid Azizam image is required for the data backup.')
+    helper_image = match.group(1)
     # The bot has stopped, so SQLite and other files have a consistent snapshot.
     code = '''import os,tarfile
 p="/backup/azizam-data.tar.gz"
@@ -105,7 +109,7 @@ os.chmod(p,0o600)
 ''' % (os.getuid(), os.getgid())
     run(['docker', 'run', '--rm', '--network', 'none', '--memory', '128m', '--cpus', '0.25',
          '--entrypoint', 'python', '-v', 'azizam_bot-data:/source:ro',
-         '-v', str(folder) + ':/backup', observer['Image'], '-c', code], timeout=300)
+         '-v', str(folder) + ':/backup', helper_image, '-c', code], timeout=300)
 
 
 def deploy(sha):

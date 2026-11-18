@@ -45,4 +45,4 @@ js/app.js      ← داده‌ی نمایشی + منطق رندر + رأی‌گ�
 ## Server deployment
 
 GitHub Actions and the server handover are described in [deploy/README.md](deploy/README.md).
-The Telegram bot itself must be added before the server can replace Observer.
+The root Dockerfile runs the Telegram bot and Mini App API together, with persistent data on the server.

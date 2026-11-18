@@ -28,6 +28,14 @@ jobs:
           node --check js/config.js
           python3 -m json.tool js/snapshot.json > /dev/null
           python3 -m unittest discover -s deploy -p 'test_*.py'
+      - name: Check the bot with isolated test data
+        run: |
+          python3 -m venv "$RUNNER_TEMP/azizam-tests"
+          "$RUNNER_TEMP/azizam-tests/bin/pip" install --disable-pip-version-check -r bot/requirements.txt
+          "$RUNNER_TEMP/azizam-tests/bin/python" -m compileall -q bot supervise.py
+          for script in bot/test_scoring.py bot/test_court.py bot/test_justice.py bot/test_stats.py; do
+            "$RUNNER_TEMP/azizam-tests/bin/python" "$script"
+          done
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
