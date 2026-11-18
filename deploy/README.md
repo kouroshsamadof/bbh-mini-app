@@ -11,14 +11,19 @@ The existing GitHub Pages publishing continues separately.
 - Server directory: `/home/arian/azizam`.
 - Private settings: `/home/arian/azizam/shared/bot.env` (mode 600).
 - Persistent bot files: Docker volume `azizam_bot-data`, mounted at `/data`.
-- API address on the server: `http://127.0.0.1:8093` (container port 8080).
+- Private API address: `http://127.0.0.1:8093` (container port 8080).
+- Public HTTPS API: `https://azizam.178-104-74-99.sslip.io`.
+- The Mini App remains at `https://kouroshsamadof.github.io/bbh-mini-app/`.
 - Runtime: 512 MiB RAM, one CPU, bounded logs, automatic restart after reboot.
 - Observer's database, settings, containers and model volume are preserved.
 
-There is no bot code in the repository yet. The workflow reports this as
-**waiting for bot code**, without interrupting Observer. If code is present but
-the first handover is not ready, it builds the image and reports **staged**.
-This does not mean the Telegram bot is running on the server.
+The bot and API are now running on the server with the imported laptop database.
+Observer and its dedicated model have been stopped, and the old Lab tunnel is
+disabled. Its data and deployment backups are retained.
+
+For a fresh installation, a missing root Dockerfile reports **waiting for bot
+code**. Until the first handover is enabled, builds report **staged** without
+starting another Telegram poller.
 
 ## What the bot developer needs to add
 
@@ -94,3 +99,17 @@ touch /home/arian/azizam/shared/pause-deployments
 Remove that file to resume. Manual workflow runs use the same readiness gates.
 The installed deployment program is maintained separately from application
 commits at `/home/arian/azizam/bin/deploy.py`.
+
+## HTTPS and the laptop watchdog
+
+The API hostname resolves directly to this server through sslip.io; it does not
+use a tunnel. Nginx serves only `/health` and `/api/`, forwards to the loopback
+port, and redirects HTTP to HTTPS. The installed site is
+`/etc/nginx/sites-available/azizam-api`; [nginx.conf](nginx.conf) is its source.
+The existing `snap.certbot.renew.timer` renews its Let's Encrypt certificate,
+with a deploy hook that validates and reloads Nginx.
+
+Keep the old laptop bot, API, tunnel/config watchdog and Startup launcher
+disabled. New application code belongs on `main`; do not run the watchdog to
+rewrite `js/config.js` with a temporary laptop URL. To use a custom hostname,
+point it at the server, configure its certificate/site, and update `js/config.js`.
