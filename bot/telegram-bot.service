@@ -1,0 +1,19 @@
+# کپی این فایل به /etc/systemd/system/telegram-bot.service و مسیرها را ویرایش کنید.
+# مسیرها را با مسیر واقعی نصب روی سرور جایگزین کنید.
+[Unit]
+Description=Telegram Points Bot (ربات امتیاز کانال)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# کاربری که سرویس با آن اجرا می‌شود (پیش‌فرض root نیست!)
+User=YOUR_LINUX_USER
+WorkingDirectory=/home/YOUR_LINUX_USER/telegram-bot
+ExecStart=/home/YOUR_LINUX_USER/telegram-bot/.venv/bin/python bot.py
+EnvironmentFile=/home/YOUR_LINUX_USER/telegram-bot/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

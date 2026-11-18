@@ -1,0 +1,13 @@
+# هرگز توکن یا دیتابیس را commit نکنید
+.env
+backups/
+bot_data.db
+bot_data.db-wal
+bot_data.db-shm
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+.venv/
+venv/

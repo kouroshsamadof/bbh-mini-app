@@ -1,0 +1,14 @@
+Unified bot + Mini App, aligned with the Azizam deployment
+
+- Bot source moved under bot/ accompanied by a repo-root Dockerfile
+  and supervise.py (single container: Telegram polling bot + HTTP API).
+- api_server.py + sync_mini_app.py no longer hard-code any secrets;
+  they read BOT_TOKEN / MINI_BOT_TOKEN from env, exactly what
+  /home/arian/azizam/shared/bot.env will provide on the server.
+- Healthcheck polls http://127.0.0.1:8080/health via urllib.
+- Root .env.example documents every env var name (token-free).
+- The bot and API both honour SHARED_DB / DB_PATH pointing at /data.
+
+The workflow will now build the image and stop at the "staged" gate
+until the server admin places activation-ready and migrates the
+laptop database into the persistent volume.
