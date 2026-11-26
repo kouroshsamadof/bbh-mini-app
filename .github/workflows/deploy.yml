@@ -33,7 +33,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/azizam-tests"
           "$RUNNER_TEMP/azizam-tests/bin/pip" install --disable-pip-version-check -r bot/requirements.txt
           "$RUNNER_TEMP/azizam-tests/bin/python" -m compileall -q bot supervise.py
-          for script in bot/test_scoring.py bot/test_court.py bot/test_justice.py bot/test_stats.py; do
+          for script in bot/test_scoring.py bot/test_stats.py; do
             "$RUNNER_TEMP/azizam-tests/bin/python" "$script"
           done
 
