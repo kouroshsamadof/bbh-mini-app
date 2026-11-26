@@ -35,34 +35,6 @@ CREATE TABLE IF NOT EXISTS points (
 CREATE INDEX IF NOT EXISTS idx_points_target ON points(target_id);
 CREATE INDEX IF NOT EXISTS idx_points_created ON points(created_at);
 
-CREATE TABLE IF NOT EXISTS judgments (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id     INTEGER NOT NULL,
-    target_id   INTEGER NOT NULL,
-    target_name TEXT,
-    admin_id    INTEGER,
-    admin_name  TEXT,
-    reason      TEXT,
-    status      TEXT NOT NULL DEFAULT 'open',   -- open | lastcall | closed
-    winner      TEXT,                           -- strike | chance
-    message_id  INTEGER,
-    created_at  TEXT NOT NULL,
-    closes_at   TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS judgment_votes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    judgment_id INTEGER NOT NULL REFERENCES judgments(id) ON DELETE CASCADE,
-    user_id     INTEGER NOT NULL,
-    user_name   TEXT,
-    vote        TEXT NOT NULL CHECK (vote IN ('strike', 'chance')),
-    created_at  TEXT NOT NULL,
-    UNIQUE(judgment_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_votes_judgment ON judgment_votes(judgment_id);
-CREATE INDEX IF NOT EXISTS idx_judgments_status ON judgments(status);
-CREATE INDEX IF NOT EXISTS idx_judgments_target ON judgments(target_id);
-
 CREATE TABLE IF NOT EXISTS personal_abilities (
     user_id    INTEGER PRIMARY KEY,
     ability    TEXT NOT NULL,
@@ -104,6 +76,19 @@ CREATE TABLE IF NOT EXISTS stat_votes (
 );
 CREATE INDEX IF NOT EXISTS idx_stat_votes_proposal ON stat_votes(proposal_id);
 CREATE INDEX IF NOT EXISTS idx_stat_proposals_target ON stat_proposals(target_id);
+
+CREATE TABLE IF NOT EXISTS news (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     INTEGER NOT NULL,
+    admin_id    INTEGER,
+    admin_name  TEXT,
+    content     TEXT NOT NULL,
+    message_id  INTEGER,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_news_chat ON news(chat_id);
+CREATE INDEX IF NOT EXISTS idx_news_expires ON news(expires_at);
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -332,142 +317,6 @@ class Database:
         out.sort(key=lambda x: x["final"], reverse=True)
         return out
 
-    # ---------- دادگاه رأی‌گیری ----------
-
-    def create_judgment(self, chat_id: int, target_id: int, target_name: str,
-                        admin_id: int | None, admin_name: str | None,
-                        reason: str | None, closes_at: str) -> int:
-        with self._lock, self._conn:
-            cur = self._conn.execute(
-                """
-                INSERT INTO judgments(chat_id, target_id, target_name, admin_id, admin_name,
-                                      reason, status, created_at, closes_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
-                """,
-                (chat_id, target_id, target_name, admin_id, admin_name, reason, _now(), closes_at),
-            )
-            return int(cur.lastrowid)
-
-    def set_judgment_message(self, judgment_id: int, message_id: int) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE judgments SET message_id = ? WHERE id = ?", (message_id, judgment_id)
-            )
-
-    def get_judgment(self, judgment_id: int):
-        with self._lock:
-            return self._conn.execute(
-                "SELECT * FROM judgments WHERE id = ?", (judgment_id,)
-            ).fetchone()
-
-    def open_judgment_for(self, chat_id: int, target_id: int):
-        with self._lock:
-            return self._conn.execute(
-                "SELECT * FROM judgments WHERE chat_id = ? AND target_id = ? AND status IN ('open', 'lastcall')",
-                (chat_id, target_id),
-            ).fetchone()
-
-    def open_judgments(self) -> list[sqlite3.Row]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM judgments WHERE status IN ('open', 'lastcall')"
-            ).fetchall()
-        return list(rows)
-
-    def set_judgment_lastcall(self, judgment_id: int, closes_at: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE judgments SET status = 'lastcall', closes_at = ? WHERE id = ?",
-                (closes_at, judgment_id),
-            )
-
-    def close_judgment(self, judgment_id: int, winner: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                "UPDATE judgments SET status = 'closed', winner = ? WHERE id = ?",
-                (winner, judgment_id),
-            )
-
-    def upsert_vote(self, judgment_id: int, user_id: int, user_name: str | None, vote: str) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO judgment_votes(judgment_id, user_id, user_name, vote, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(judgment_id, user_id) DO UPDATE SET
-                    vote       = excluded.vote,
-                    user_name  = excluded.user_name,
-                    created_at = excluded.created_at
-                """,
-                (judgment_id, user_id, user_name, vote, _now()),
-            )
-
-    def votes_map(self, judgment_ids: list[int]) -> dict[int, dict]:
-        """شمارش رأی‌ها برای چند دادگاه — یک کوئری گروهی به‌جای N+1."""
-        if not judgment_ids:
-            return {}
-        placeholders = ",".join("?" for _ in judgment_ids)
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT judgment_id, vote, COUNT(*) AS c FROM judgment_votes "
-                f"WHERE judgment_id IN ({placeholders}) GROUP BY judgment_id, vote",
-                list(judgment_ids),
-            ).fetchall()
-        out: dict[int, dict] = {}
-        for r in rows:
-            d = out.setdefault(r["judgment_id"], {"strike": 0, "chance": 0})
-            d[r["vote"]] = r["c"]
-        return out
-
-    def count_judgments(self) -> int:
-        with self._lock:
-            (n,) = self._conn.execute("SELECT COUNT(*) FROM judgments").fetchone()
-        return n
-
-    def count_open_judgments(self) -> int:
-        with self._lock:
-            (n,) = self._conn.execute(
-                "SELECT COUNT(*) FROM judgments WHERE status IN ('open', 'lastcall')"
-            ).fetchone()
-        return n
-
-    def judgment_winner_stats(self) -> dict[str, int]:
-        """تعداد دادگاه‌های بسته‌شده بر اساس برنده (strike/chance) + مجموع."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT winner, COUNT(*) AS c FROM judgments WHERE winner IS NOT NULL GROUP BY winner"
-            ).fetchall()
-        stats = {r["winner"]: r["c"] for r in rows}
-        stats["total_closed"] = sum(stats.values())
-        return stats
-
-    def list_judgments(self, limit: int = 5, offset: int = 0) -> list[sqlite3.Row]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM judgments ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)
-            ).fetchall()
-        return list(rows)
-
-    def list_judgments_for(self, target_id: int, limit: int = 10) -> list[sqlite3.Row]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM judgments WHERE target_id = ? ORDER BY id DESC LIMIT ?",
-                (target_id, limit),
-            ).fetchall()
-        return list(rows)
-
-    def vote_counts(self, judgment_id: int) -> tuple[int, int, int]:
-        """خروجی: (اخطارِ استرایک، فرصت دیگر، مجموع رأی‌دهندگان)"""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT vote, COUNT(*) AS c FROM judgment_votes WHERE judgment_id = ? GROUP BY vote",
-                (judgment_id,),
-            ).fetchall()
-        counts = {r["vote"]: r["c"] for r in rows}
-        strikes = counts.get("strike", 0)
-        chances = counts.get("chance", 0)
-        return strikes, chances, strikes + chances
-
     # ---------- توانایی شخصی ----------
 
     def set_ability(self, user_id: int, ability: str) -> None:
@@ -501,6 +350,63 @@ class Database:
                 list(user_ids),
             ).fetchall()
         return {r["user_id"]: r["ability"] for r in rows}
+
+    # ---------- خبر روز (news) ----------
+
+    def create_news(self, chat_id: int, content: str, admin_id: int | None,
+                    admin_name: str | None, message_id: int | None,
+                    expires_at: str) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """
+                INSERT INTO news(chat_id, admin_id, admin_name, content, message_id,
+                                 created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (chat_id, admin_id, admin_name, content, message_id, _now(), expires_at),
+            )
+        return int(cur.lastrowid)
+
+    def deactivate_previous_news(self, chat_id: int) -> None:
+        """خبرهای قبلی فعال همین چت را حذف می‌کند تا فقط آخرین خبر باقی بماند."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM news WHERE chat_id = ? AND expires_at > ?",
+                (chat_id, _now()),
+            )
+
+    def get_active_news(self, chat_id: int):
+        """آخرین خبر فعال (نامنتهی به انقضا) را برمی‌گرداند."""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM news
+                WHERE chat_id = ? AND expires_at > ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (chat_id, _now()),
+            ).fetchone()
+        return row
+
+    def get_news(self, news_id: int):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM news WHERE id = ?", (news_id,)
+            ).fetchone()
+        return row
+
+    def list_expired_news(self) -> list[sqlite3.Row]:
+        """خبرهای منقضی‌شده را برای حذف خودکار برمی‌گرداند."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM news WHERE expires_at <= ? ORDER BY id",
+                (_now(),),
+            ).fetchall()
+        return list(rows)
+
+    def delete_news(self, news_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM news WHERE id = ?", (news_id,))
 
     # ---------- آمار اعضا ----------
 

@@ -174,6 +174,29 @@ def build_state():
     return out_members
 
 
+def get_active_news(chat_id: int | None = None):
+    """آخرین خبر فعال (نامنتهی به انقضا) را برمی‌گرداند."""
+    if chat_id is not None:
+        row = _get_conn().execute(
+            """
+            SELECT * FROM news
+            WHERE chat_id = ? AND expires_at > ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (chat_id, _now()),
+        ).fetchone()
+    else:
+        row = _get_conn().execute(
+            """
+            SELECT * FROM news
+            WHERE expires_at > ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (_now(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def judgments_history(limit: int = 30) -> list[dict]:
     rows = _get_conn().execute(
         """
@@ -273,6 +296,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(401, {"error": "not authorized"})
                 return
             self._send_json(200, {"history": judgments_history()})
+            return
+        if path == "/api/news":
+            user = _require_user(self.headers.get("X-Init-Data"))
+            if not user:
+                self._send_json(401, {"error": "not authorized"})
+                return
+            qs = dict(parse_qsl(parsed_path[1])) if len(parsed_path) > 1 else {}
+            chat_id = int(qs["chat_id"]) if qs.get("chat_id") else None
+            news = get_active_news(chat_id)
+            self._send_json(200, {"news": news})
             return
         self._send_json(404, {"error": "not found"})
 

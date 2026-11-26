@@ -1,18 +1,18 @@
-"""ربات مدیریت امتیاز کانال — کاملاً فارسی
+"""ربات مدیریت امتیاز کانال — BBH
 
 قابلیت‌ها:
-  • نگهداری اطلاعات اعضا (نام، سن، یوزرنیم، آیدی)
   • ثبت اخطار (۱-)، استرایک (۳-) و امتیاز مثبت (۱+) توسط ادمین‌ها
-  • قانون ۳‌به۱: هر ۳ امتیاز مثبت، ۱ امتیاز منفی را پاک می‌کند
   • گزارش نهایی هر عضو با تفکیک کامل محاسبات
-  • تغییر زنده‌ی کلمات دستورات (اخطار/استرایک/امتیاز) با /setword
+  • رتبه‌بندی و آمار اعضاء (۰ تا ۱۰۰)
+  • capacidad persoonли (توانایی شخصی)
+  • خبر روز با حذف خودکار بعد از ۲۴ ساعت
 """
 import logging
 import re
 import time
 from datetime import datetime, timedelta
 
-from telegram import ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
@@ -35,7 +35,6 @@ logging.basicConfig(
     format="%(asctime)s — %(name)s — %(levelname)s — %(message)s",
     level=logging.INFO,
 )
-# لاگ‌های httpx/httpcore آدرس کامل API (و حاوی توکن) را چاپ می‌کنند → بی‌صدا می‌کنیم
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -48,17 +47,11 @@ KIND_META = {
     "plus":   {"label": "امتیاز مثبت", "emoji": "🟢"},
 }
 
-# وضعیت‌های گفت‌وگوی تعاملی «افزودن عضو»
-ASK_TARGET, ASK_NAME, ASK_AGE, ASK_CONFIRM = range(4)
-# وضعیت‌های گفت‌وگوی «عضویت خودکار» (/join)
-JOIN_NAME, JOIN_AGE = 10, 11
+# خبر روز — خود حذف شدن بعد از ۲۴ ساعت
+NEWS_HOURS = 24
 
-PAGE_SIZE = 8
-
-# دادگاه رأی‌گیری
-VOTE_MINUTES = 5            # مدت استاندارد رأی‌گیری
-LASTCALL_MINUTES = 2        # مدت «آخرین فرصت تغییر نظر» هنگام مساوی شدن
-STAT_VOTE_MINUTES = 5       # مدت رأی‌گیری پیشنهاد آمار
+# رأی‌گیری آمار
+STAT_VOTE_MINUTES = 5
 
 
 # ---------------------------------------------------------------- ابزارها
@@ -176,7 +169,7 @@ def resolve_target(msg, tokens: list[str]):
             return Target(m["user_id"], m["full_name"], m["username"], rest[1:]), None
         return None, (
             f"❌ کاربری با یوزرنیم {first} در دیتابیس نیست.\n"
-            f"اول او را ثبت کنید، مثلاً:\n/addmember {first} نام کاربر سن"
+            f"اول او را ثبت کنید (از طریق ربات اصلی یا Mini App)."
         )
 
     return None, (
@@ -234,162 +227,56 @@ def compact_stats_line(stats: dict) -> str:
     )
 
 
+def format_member_card(target_id: int, member) -> str:
+    name = member["full_name"] if member else f"کاربر {target_id}"
+    lines = [f"👤 {name}", f"🆔 آیدی: {ftext.fa_digits(target_id)}"]
+    if member:
+        if member["username"]:
+            lines.append(f"🔗 یوزرنیم: @{member['username']}")
+        age = member["age"]
+        lines.append(f"🎂 سن: {ftext.fa_digits(age) if age is not None else 'ثبت نشده'}")
+        if member["note"]:
+            lines.append(f"📝 یادداشت: {member['note']}")
+        try:
+            ts = datetime.fromisoformat(member["created_at"])
+            lines.append(f"🗓 تاریخ ثبت: {ftext.fa_datetime(ts)}")
+        except ValueError:
+            pass
+    s = db.summary_for(target_id)
+    lines.append("")
+    lines.append(compact_stats_line(s))
+    return "\n".join(lines)
+
+
 def main_menu_keyboard(master: bool) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("➕ افزودن عضو", callback_data="menu:add"),
-         InlineKeyboardButton("📋 لیست اعضا", callback_data="menu:list:0")],
         [InlineKeyboardButton("📊 گزارش همه", callback_data="menu:all"),
-         InlineKeyboardButton("⚖️ دادگاه‌ها", callback_data="menu:justice")],
-        [InlineKeyboardButton("📈 آمار اعضا", callback_data="menu:stats"),
-         InlineKeyboardButton("🏆 رتبه‌بندی", callback_data="menu:ranking")],
-        [InlineKeyboardButton("❓ راهنما", callback_data="menu:help")],
+         InlineKeyboardButton("📈 آمار اعضا", callback_data="menu:stats")],
+        [InlineKeyboardButton("🏆 رتبه‌بندی", callback_data="menu:ranking"),
+         InlineKeyboardButton("❓ راهنما", callback_data="menu:help")],
     ]
     if master:
-        rows.append([InlineKeyboardButton("⚙️ تنظیم کلمه‌های دستورات", callback_data="menu:words")])
-    rows.append([InlineKeyboardButton("✍️ ثبت نام من", callback_data="join:start")])
+        rows.append([InlineKeyboardButton("📢 خبر روز", callback_data="menu:news")])
     rows.append([InlineKeyboardButton("❌ بستن", callback_data="menu:close")])
     return InlineKeyboardMarkup(rows)
 
 
-JUSTICE_PAGE_SIZE = 5
+HELP_TEXT = """❓ راهنمای ربات مدیریت امتیاز BBH
 
-
-def _judgment_winner_label(j) -> str:
-    if j["status"] in ("open", "lastcall"):
-        return "🔴 در جریان"
-    if j["winner"] == "strike":
-        return "🔨 استرایک"
-    return "🟩 فرصت دیگر"
-
-
-def _judgment_line(i: int, j, votes: dict) -> str:
-    try:
-        when = ftext.fa_datetime(datetime.fromisoformat(j["created_at"]))
-    except ValueError:
-        when = j["created_at"]
-    reason = f" | 💬 {j['reason']}" if j["reason"] else ""
-    admin = f" | 👮 {j['admin_name']}" if j["admin_name"] else ""
-    return (
-        f"{ftext.fa_digits(i)}. «{j['target_name']}» — 🗓 {when}\n"
-        f"   🟥 {ftext.fa_digits(votes['strike'])} — 🟩 {ftext.fa_digits(votes['chance'])}"
-        f" | برنده: {_judgment_winner_label(j)}{admin}{reason}"
-    )
-
-
-def build_justice_panel():
-    total = db.count_judgments()
-    open_now = db.count_open_judgments()
-    winners = db.judgment_winner_stats()
-    lines = [
-        "⚖️ پنل دادگاه",
-        "",
-        f"کل دادگاه‌های برگزارشده: {ftext.fa_digits(total)}",
-        f"🟥 برنده استرایک: {ftext.fa_digits(winners.get('strike', 0))}"
-        f"  |  🟩 برنده فرصت دیگر: {ftext.fa_digits(winners.get('chance', 0))}",
-        f"🔴 دادگاه‌های در جریان: {ftext.fa_digits(open_now)}",
-        "",
-        "برای دیدن تاریخچه دکمه‌ی زیر را بزنید:",
-    ]
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 تاریخچه‌ی دادگاه‌ها", callback_data="menu:justice:hist:0"),
-         InlineKeyboardButton(f"🔴 در جریان ({ftext.fa_digits(open_now)})", callback_data="menu:justice:open")],
-        [InlineKeyboardButton("↩️ بازگشت", callback_data="menu:back"),
-         InlineKeyboardButton("❌ بستن", callback_data="menu:close")],
-    ])
-    return "\n".join(lines), keyboard
-
-
-def build_justice_history(page: int):
-    total = db.count_judgments()
-    if total == 0:
-        return "هنوز هیچ دادگاهی برگزار نشده است.", back_keyboard()
-    total_pages = (total + JUSTICE_PAGE_SIZE - 1) // JUSTICE_PAGE_SIZE
-    page = max(0, min(page, total_pages - 1))
-    rows = db.list_judgments(limit=JUSTICE_PAGE_SIZE, offset=page * JUSTICE_PAGE_SIZE)
-    votes = db.votes_map([r["id"] for r in rows])
-    lines = [
-        f"📋 تاریخچه‌ی دادگاه‌ها — صفحه {ftext.fa_digits(page + 1)} از {ftext.fa_digits(total_pages)}"
-        f" (کل: {ftext.fa_digits(total)})",
-        "",
-    ]
-    for i, j in enumerate(rows, start=page * JUSTICE_PAGE_SIZE + 1):
-        v = votes.get(j["id"], {"strike": 0, "chance": 0})
-        lines.append(_judgment_line(i, j, v))
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("‹ صفحه قبل", callback_data=f"menu:justice:hist:{page - 1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("صفحه بعد ›", callback_data=f"menu:justice:hist:{page + 1}"))
-    keyboard_rows = [nav] if nav else []
-    keyboard_rows.append([
-        InlineKeyboardButton("↩️ بازگشت", callback_data="menu:justice"),
-        InlineKeyboardButton("❌ بستن", callback_data="menu:close"),
-    ])
-    return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
-
-
-def build_justice_open():
-    rows = db.open_judgments()
-    total = len(rows)
-    if total == 0:
-        lines = ["🔴 هیچ دادگاه بازی در حال حاضر برگزار نیست."]
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 تازه‌سازی", callback_data="menu:justice:open"),
-            InlineKeyboardButton("↩️ بازگشت", callback_data="menu:justice"),
-        ]])
-        return "\n".join(lines), keyboard
-    votes = db.votes_map([r["id"] for r in rows])
-    lines = [f"🔴 دادگاه‌های در جریان ({ftext.fa_digits(total)} عدد):", ""]
-    for j in rows:
-        v = votes.get(j["id"], {"strike": 0, "chance": 0})
-        try:
-            ends = ftext.fa_datetime(datetime.fromisoformat(j["closes_at"]))
-        except ValueError:
-            ends = j["closes_at"]
-        lastcall = " 🚨 (آخرین فرصت)" if j["status"] == "lastcall" else ""
-        lines.append(
-            f"⚖️ «{j['target_name']}»{lastcall}\n"
-            f"   🟥 {ftext.fa_digits(v['strike'])} — 🟩 {ftext.fa_digits(v['chance'])}"
-            f" | ⏳ پایان: {ends}"
-        )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 تازه‌سازی", callback_data="menu:justice:open"),
-         InlineKeyboardButton("↩️ بازگشت", callback_data="menu:justice")],
-        [InlineKeyboardButton("❌ بستن", callback_data="menu:close")],
-    ])
-    return "\n".join(lines), keyboard
-
-
-def join_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✍️ ثبت نام من", callback_data="join:start"),
-    ]])
-
-
-HELP_TEXT = """❓ راهنمای ربات مدیریت امتیاز
-
-🎯 هدف ربات: ثبت اخطار/استرایک/امتیاز مثبت برای اعضای کانال، برگزاری «دادگاه رأی‌گیری» برای استرایک، و محاسبه‌ی امتیاز نهایی با قوانین پاک‌سازی (هر ۵ پلاس = ۱ استرایک، هر ۳ پلاس = ۱ اخطار).
+🎯 هدف ربات: ثبت اخطار/استرایک/امتیاز مثبت برای اعضا، و محاسبه‌ی امتیاز نهایی با قوانین پاک‌سازی.
 
 📌 ثبت امتیاز (فقط ادمین‌ها):
 به پیام کاربر ریپلای کنید و یکی از این‌ها را بنویسید:
-• {warn} — ثبت اخطار (۱ امتیاز منفی)
-• {strike} — تشکیل دادگاه استرایک (۳ امتیاز منفی در صورت رأی بیشتر به نفع استرایک)
-• {plus} — ثبت امتیاز مثبت (۱ امتیاز مثبت)
+• اخطار — ثبت اخطار (۱ امتیاز منفی)
+• استرایک — ثبت استرایک (۳ امتیاز منفی)
+• امتیاز — ثبت امتیاز مثبت (۱ امتیاز مثبت)
 
 بدون ریپلای هم می‌شود، با آیدی یا یوزرنیم:
-• {warn} @ali دلیل تخلف
-• {strike} 123456789 توهین
-• {plus} @ali همکاری خوب
+• اخطار @ali دلیل تخلف
+• استرایک 123456789 توهین
+• امتیاز @ali همکاری خوب
 
 (به‌جای کلمه‌های فارسی می‌توانید از /warn ، /strike و /plus هم استفاده کنید.)
-
-⚖️ دادگاه استرایک (رأی‌گیری خودکار):
-با دستور استرایک روی کاربر، به‌جای ثبت فوری، رأی‌گیری عمومی باز می‌شود:
-• 🟥 استرایک بزنید  |  🟩 یک فرصت دیگر
-• همه‌ی اعضا به‌جز خودِ فرد می‌توانند رأی دهند؛ رأی تا بسته شدن قابل تغییر است
-• رأی‌گیری ۵ دقیقه باز است؛ ادمین‌ها با «🏁 اعلام نتیجه» زودتر می‌بندند
-• اگر مساوی شود → «آخرین فرصت تغییر نظر» (۲ دقیقه‌ی دیگر)؛ اگر باز مساوی شود → استرایک ثبت می‌شود
-• استرایکِ رأی‌گیری‌شده وارد محاسبات امتیاز و مجازات (۳ میوت / ۵ اخراج) می‌شود
 
 📈 آمار اعضا (هر نفر ۰ تا ۱۰۰):
 • /stats — آمار خودتان (یا ریپلای + /stats)
@@ -397,49 +284,27 @@ HELP_TEXT = """❓ راهنمای ربات مدیریت امتیاز
 • /mystats — آمار خودتان
 • /allstats — آمار کلی همه (ادمین‌ها)
 • /ability متن — تعریف یا تغییر توانایی شخصی خودتان
-• دکمه‌ی «🌟 تنظیم توانایی شخصی» داخل /stats — ثبت توانایی با فرم
 
 🏆 رتبه‌بندی:
-• /ranking — جدول امتیازها از بهترین به بدترین (همراه با رتبه‌ی خودتان)
+• /ranking — جدول امتیازها از بهترین به بدترین
 • /ranking stats — رتبه‌بندی بر اساس آمار (میانگین 💡+😂+🥰+🐢)
 • /statsranking — میان‌بر همان رتبه‌بندی آمار
-• دکمه‌ی «🏆 رتبه‌بندی» در /menu
-• /stat iq @ali — پیشنهاد افزایش ۵٪ با رأی‌گیری گروه
-• /stat iq @ali take — پیشنهاد برگرداندن ۵٪ با رأی‌گیری
-• هر رأی‌گیری با بیش از ۵۰٪ تایید اعمال می‌شود (خودِ فرد نمی‌تواند رأی دهد)
-• آمارها: 💡 IQ | 😂 COMEDY | 🥰 SIMPNESS | 🐢 RETARDNESS
 
 📊 مشاهده‌ی گزارش‌ها:
 • /points — گزارش کامل یک کاربر (با ریپلای یا آیدی/یوزرنیم)
 • /mypoints — امتیاز خودتان
 • /report — گزارش همه‌ی اعضا با امتیاز نهایی
 • /history — تاریخچه‌ی آخرین رویدادهای یک کاربر
-• /justice — آخرین ۱۰ دادگاه (با ریپلای/یوزرنیم برای یک نفر خاص)
 
-👥 مدیریت اعضا (فقط ادمین‌ها):
-• /addmember — ثبت عضو جدید (ریپلای + نام سن، یا آیدی/یوزرنیم، یا بدون آرگومان برای فرم تعاملی)
-• /member — نمایش کارت یک عضو
-• /listmembers — لیست اعضا با صفحه‌بندی
-• /setname و /setage — تغییر نام و سن
-• /delmember — حذف عضو (تاریخچه‌ی امتیازها حفظ می‌شود)
-
-⚙️ تغییر کلمه‌های دستورات (فقط ادمین اصلی):
-• /words — نمایش کلمه‌های فعلی
-• /setword warn کلمهٔ_جدید
-• /setword strike کلمهٔ_جدید
-• /setword plus کلمهٔ_جدید
+📢 خبر روز (فقط ادمین‌ها، داخل گروه):
+• /news متن خبر — ثبت خبر روز؛ خود حذف می‌شود پس از ۲۴ ساعت
+• /news بدون متن — نمایش خبر فعلی (اگر وجود دارد)
 
 🔑 دستورات عمومی:
-• /join — ثبت نام با یوزرنیم خودتان (همه)
 • /start — شروع
 • /menu — پنل دکمه‌ای
 • /id — نمایش آیدی عددی خودتان
 • /cancel — لغو فرم جاری
-
-🔨 مجازات استرایک:
-• ۳ استرایک باقی‌مانده → میوت ۱ روزه
-• ۵ استرایک باقی‌مانده → اخراج از گروه
-(فقط استرایک‌های «باقی‌مانده بعد از پاک‌سازی» شمرده می‌شوند؛ ادمین‌ها مجازات نمی‌شوند.)
 
 🧮 نحوه‌ی محاسبه:
 اخطار = ۱- | استرایک = ۳- | امتیاز مثبت = ۱+
@@ -466,8 +331,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "به اعضای برادری BBH خوش آمدید 👋\n\n"
         "من ربات مدیریت امتیاز این کانال هستم؛ اخطار، استرایک و امتیاز مثبت اعضا را ثبت و محاسبه می‌کنم.\n\n"
         f"🆔 آیدی عددی شما: {ftext.fa_digits(user.id) if user else '—'}\n\n"
-        "برای دیدن همه‌ی دستورها /help را بفرستید.\n"
-        "برای ثبت‌نام با یوزرنیم خودتان، دکمه‌ی «✍️ ثبت نام من» را بزنید یا /join را بفرستید.\n\n"
+        "برای دیدن همه‌ی دستورها /help را بفرستید.\n\n"
         "━━━━━━━━━━━━━━\n"
         "طراحی شده توسط کوروش ❤️"
     )
@@ -475,7 +339,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         master = await is_master(update, context)
         await update.effective_message.reply_text(text, reply_markup=main_menu_keyboard(master))
     else:
-        await update.effective_message.reply_text(text, reply_markup=join_keyboard())
+        await update.effective_message.reply_text(text)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,13 +362,12 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """همه‌ی کاربران — دکمه‌ی باز کردن پنل برادری BBH را نشان می‌دهد."""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    from telegram import WebAppInfo
 
-    startapp = "https://t.me/azizmstrikebot?startapp"  # تلگرام این لینک را داخل خودش باز می‌کند
+    startapp = "https://t.me/azizmstrikebot?startapp"
     pages_url = "https://kouroshsamadof.github.io/bbh-mini-app/"
     chat = update.effective_chat
     if chat and chat.type in ("group", "supergroup", "channel"):
-        # دکمه‌ی web_app در گروه/کانال کار نمی‌کند؛ لینک مستقیم تی‌.ام‌ای را بفرست
         text = "🎮 «پنل برادری BBH» — روی دکمه‌ی زیر بزن تا همان‌جا داخل تلگرام باز شود:"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎮 باز کردن پنل (داخل تلگرام)", url=startapp)]])
     else:
@@ -613,7 +476,7 @@ async def cmd_statsranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_all_report() -> str:
     rows = db.summaries_for_all()
     if not rows:
-        return "هنوز عضوی در دیتابیس ثبت نشده است.\nبرای افزودن: /addmember"
+        return "هنوز عضوی در دیتابیس ثبت نشده است."
     lines = ["📊 گزارش همه‌ی اعضا (از بهترین به بدتر):", ""]
     for i, r in enumerate(rows[:30], start=1):
         uname = f" (@{r['username']})" if r["username"] else ""
@@ -664,63 +527,10 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text("\n".join(lines))
 
 
-# ---------------------------------------------------------------- مجازات خودکار استرایک
-
-_MUTE_PERMISSIONS = ChatPermissions(
-    can_send_messages=False,
-    can_send_audios=False,
-    can_send_documents=False,
-    can_send_photos=False,
-    can_send_videos=False,
-    can_send_video_notes=False,
-    can_send_voice_notes=False,
-    can_send_polls=False,
-    can_send_other_messages=False,
-    can_add_web_page_previews=False,
-    can_invite_users=False,
-)
-
-
-async def maybe_punish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, target, stats: dict) -> list[str]:
-    """اگر استرایک‌های باقی‌مانده به حد مجازات رسید، میوت/اخراج اعمال می‌شود."""
-    cur = stats["current_strikes"]
-    if cur < scoring.STRIKE_MUTE_LIMIT:
-        return []
-    # ادمین‌ها و خود ربات هرگز مجازات نمی‌شوند
-    try:
-        tmember = await context.bot.get_chat_member(chat_id, target.user_id)
-        st = getattr(tmember.status, "value", str(tmember.status)).lower()
-        if st in ("creator", "owner", "administrator"):
-            return [f"ℹ️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید، اما چون ادمین است مجازات نشد."]
-    except Exception as exc:
-        logger.warning("get_chat_member(target) failed: %s", exc)
-        return [f"⚠️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید، اما وضعیت ادمینی او مشخص نشد؛ مجازات اعمال نشد."]
-
-    if cur >= scoring.STRIKE_BAN_LIMIT:
-        try:
-            await context.bot.ban_chat_member(chat_id, target.user_id)
-            return [f"🔨 «{target.name}» به دلیل رسیدن به {ftext.fa_digits(cur)} استرایک، از گروه اخراج شد."]
-        except Exception as exc:
-            logger.warning("ban failed: %s", exc)
-            return [f"⚠️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید — اخراج خودکار انجام نشد (ربات اجازه‌ی اخراج ندارد)."]
-
-    try:
-        await context.bot.restrict_chat_member(
-            chat_id,
-            target.user_id,
-            permissions=_MUTE_PERMISSIONS,
-            until_date=datetime.now() + timedelta(days=1),
-        )
-        return [f"🔇 «{target.name}» به دلیل رسیدن به {ftext.fa_digits(cur)} استرایک، ۱ روز میوت شد."]
-    except Exception as exc:
-        logger.warning("mute failed: %s", exc)
-        return [f"⚠️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید — میوت خودکار انجام نشد (ربات اجازه‌ی میوت ندارد)."]
-
-
 # ---------------------------------------------------------------- 📈 آمار اعضا (0 تا 100)
 
 STAT_META = {
-    "retardness": {"en": "RETARDNESS", "emoji": "🐢", "fa": "عقب‌ماندگی"},
+    "retardness": {"en": "RETARDNESS", "emoji": "🐢", "fa": "عقب‌Mondگی"},
     "iq":         {"en": "IQ",          "emoji": "💡", "fa": "هوش"},
     "simp":       {"en": "SIMPNESS",    "emoji": "🥰", "fa": "سیمپ بودن"},
     "comedy":     {"en": "COMEDY",      "emoji": "😂", "fa": "کمدین بودن"},
@@ -816,13 +626,13 @@ STATS_PAGE_SIZE = 5
 def build_all_stats(page: int):
     total = db.count_members()
     if total == 0:
-        return "هنوز عضوی ثبت‌نام نکرده است.\nاعضا با /join ثبت‌نام می‌کنند.", None
+        return "هنوز عضوی ثبت‌نام نکرده است.", None
     stats_map = db.get_all_stats_map()
     total_pages = (total + STATS_PAGE_SIZE - 1) // STATS_PAGE_SIZE
     page = max(0, min(page, total_pages - 1))
     members = db.list_members(limit=STATS_PAGE_SIZE, offset=page * STATS_PAGE_SIZE)
     member_ids = [m["user_id"] for m in members]
-    abilities = db.abilities_map(member_ids)   # یک کوئری برای همه‌ی اعضای صفحه
+    abilities = db.abilities_map(member_ids)
     lines = [
         f"📈 آمار کلی اعضا — صفحه {ftext.fa_digits(page + 1)} از {ftext.fa_digits(total_pages)}"
         f" (کل: {ftext.fa_digits(total)})",
@@ -1139,255 +949,119 @@ async def ability_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await _save_ability(update, context, cleaned)
 
 
-# ---------------------------------------------------------------- ⚖️ دادگاه رأی‌گیری (برای استرایک)
+# ---------------------------------------------------------------- 📢 خبر روز (/news)
 
-def vote_keyboard(judgment_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🟥 استرایک بزنید", callback_data=f"jvote:strike:{judgment_id}"),
-            InlineKeyboardButton("🟩 یک فرصت دیگر", callback_data=f"jvote:chance:{judgment_id}"),
-        ],
-        [InlineKeyboardButton("🏁 اعلام نتیجه (ادمین‌ها)", callback_data=f"jvote:close:{judgment_id}")],
-    ])
+MAX_NEWS_LEN = 500
 
 
-def judgment_view(j, strikes: int, chances: int, voters: int) -> str:
-    if j["status"] == "lastcall":
-        status_line = "🚨 آخرین فرصت تغییر نظر — اگر باز مساوی شود، استرایک ثبت می‌شود"
-    else:
-        status_line = f"🟦 رأی‌گیری باز است ({ftext.fa_digits(VOTE_MINUTES)} دقیقه)"
-    try:
-        ends = ftext.fa_datetime(datetime.fromisoformat(j["closes_at"]))
-        timing = f"⏳ پایان رأی‌گیری: {ends}"
-    except ValueError:
-        timing = "⏳ پایان رأی‌گیری: به‌زودی"
-    lines = [
-        f"⚖️ دادگاه برای «{j['target_name']}»",
-        f"👮 پیشنهاددهنده: {j['admin_name'] or 'ادمین'}",
-    ]
-    if j["reason"]:
-        lines.append(f"💬 دلیل: {j['reason']}")
-    lines.append("")
-    lines.append(
-        f"🟥 استرایک: {ftext.fa_digits(strikes)} رأی    "
-        f"🟩 فرصت دیگر: {ftext.fa_digits(chances)} رأی"
-    )
-    lines.append(f"👥 رأی‌دهندگان: {ftext.fa_digits(voters)} نفر")
-    lines.append("")
-    lines.append(status_line)
-    lines.append(timing)
-    lines.append("(خودِ فرد نمی‌تواند رأی دهد؛ رأی تا بسته شدن قابل تغییر است.)")
-    return "\n".join(lines)
-
-
-def schedule_judgment_close(app, judgment_id: int, when: datetime) -> None:
-    try:
-        app.job_queue.run_once(
-            judgment_close_job, when=when, data=judgment_id,
-            name=f"judgment_{judgment_id}",
-        )
-    except Exception as exc:
-        logger.warning("برنامه‌ریزی بستن رأی‌گیری ناموفق: %s", exc)
-
-
-async def judgment_close_job(context: ContextTypes.DEFAULT_TYPE):
-    await finalize_judgment(context, context.job.data)
-
-
-async def court_start(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                      target, admin_id, admin_name, reason: str | None):
+async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/news <متن> — ثبت خبر روز (فقط ادمین‌ها، داخل گروه). خود حذف می‌شود پس از ۲۴ ساعت."""
     msg = update.effective_message
     chat = update.effective_chat
-    if chat is None or chat.type == "private":
-        await msg.reply_text("⚖️ دادگاه رأی‌گیری فقط داخل گروه برگزار می‌شود.")
-        return
-
     user = update.effective_user
-    if user and user.id == target.user_id:
-        await msg.reply_text("⚖️ نمی‌توانید برای خودتان دادگاه تشکیل دهید.")
+
+    if not await is_admin(update, context):
+        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند خبر ثبت کنند.")
+        return
+    if chat is None or chat.type == "private":
+        await msg.reply_text("📢 خبر روز فقط داخل گروه قابل ثبت است.")
         return
 
-    existing = db.open_judgment_for(chat.id, target.user_id)
-    if existing:
-        await msg.reply_text(
-            f"❗️ قبلاً یک دادگاه باز برای «{target.name}» وجود دارد.\n"
-            "تا اعلام نتیجه‌ی آن صبر کنید."
-        )
+    args = list(context.args or [])
+    if not args:
+        # نمایش خبر فعلی
+        current = db.get_active_news(chat.id)
+        if current:
+            try:
+                expires = ftext.fa_datetime(datetime.fromisoformat(current["expires_at"]))
+            except ValueError:
+                expires = current["expires_at"]
+            await msg.reply_text(
+                f"📢 خبر فعلی:\n\n{current['content']}\n\n"
+                f"⏳ تا: {expires}"
+            )
+        else:
+            await msg.reply_text(
+                "❓ خبر فعالی ثبت نشده است.\n"
+                "اشاره: /news متن خبر روز"
+            )
         return
 
-    closes = datetime.now() + timedelta(minutes=VOTE_MINUTES)
-    jid = db.create_judgment(
+    content = " ".join(args).strip()
+    if len(content) < 2:
+        await msg.reply_text("❌ متن خبر خیلی کوتاه است.")
+        return
+    if len(content) > MAX_NEWS_LEN:
+        await msg.reply_text(f"❌ متن خبر خیلی بلند است (حداکثر {MAX_NEWS_LEN} نویسه).")
+        return
+
+    # حذف خبر قبلی (اگر وجود دارد) تا فقط آخرین خبر فعال بماند
+    db.deactivate_previous_news(chat.id)
+
+    expires = datetime.now() + timedelta(hours=NEWS_HOURS)
+    admin_id = user.id if user else None
+    admin_name = display_name(user) if user else "ادمین"
+
+    sent = await msg.reply_text(
+        f"📢 خبر روز:\n\n{content}\n\n"
+        f"👮 توسط: {admin_name}\n"
+        f"⏳ خود حذف می‌شود پس از ۲۴ ساعت"
+    )
+
+    news_id = db.create_news(
         chat_id=chat.id,
-        target_id=target.user_id,
-        target_name=target.name,
+        content=content,
         admin_id=admin_id,
         admin_name=admin_name,
-        reason=reason,
-        closes_at=closes.isoformat(timespec="seconds"),
+        message_id=sent.message_id,
+        expires_at=expires.isoformat(timespec="seconds"),
     )
-    j = db.get_judgment(jid)
-    sent = await msg.reply_text(judgment_view(j, 0, 0, 0), reply_markup=vote_keyboard(jid))
-    db.set_judgment_message(jid, sent.message_id)
-    schedule_judgment_close(context.application, jid, closes)
-    logger.info("دادگاه #%s برای کاربر %s در چت %s باز شد", jid, target.user_id, chat.id)
+
+    schedule_news_delete(context.application, news_id, expires)
+    logger.info("خبر #%s ثبت شد در چت %s، تا %s", news_id, chat.id, expires.isoformat())
 
 
-async def vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data or ""
-    m = re.fullmatch(r"jvote:(strike|chance|close):(\d+)", data)
-    if not m:
-        return
-    action, jid = m.group(1), int(m.group(2))
-    j = db.get_judgment(jid)
-    if not j:
-        await query.answer("این رأی‌گیری پیدا نشد!", show_alert=True)
-        return
-    user = update.effective_user
-
-    if action == "close":
-        if not await is_admin(update, context):
-            await query.answer("⛔️ فقط ادمین‌ها می‌توانند نتیجه را اعلام کنند.", show_alert=True)
-            return
-        await query.answer()
-        await finalize_judgment(context, jid)
-        return
-
-    if j["status"] == "closed":
-        await query.answer("این رأی‌گیری بسته شده است.", show_alert=True)
-        return
-    if user is None or user.is_bot:
-        await query.answer("ربات‌ها رأی نمی‌دهند.", show_alert=True)
-        return
-    if user.id == j["target_id"]:
-        await query.answer("شما نمی‌توانید به دادگاه خودتان رأی دهید.", show_alert=True)
-        return
-
-    db.upsert_vote(jid, user.id, display_name(user), action)
-    await query.answer("✅ رأی شما ثبت شد.")
-
-    strikes, chances, voters = db.vote_counts(jid)
-    j = db.get_judgment(jid)
+def schedule_news_delete(app, news_id: int, when: datetime) -> None:
     try:
-        await query.edit_message_text(
-            judgment_view(j, strikes, chances, voters),
-            reply_markup=vote_keyboard(jid),
+        app.job_queue.run_once(
+            news_delete_job, when=when, data=news_id,
+            name=f"news_{news_id}",
         )
-    except BadRequest:
-        pass  # متن تغییر نکرده — نادیده
     except Exception as exc:
-        logger.warning("به‌روزرسانی پیام رأی‌گیری ناموفق: %s", exc)
+        logger.warning("برنامه‌ریزی حذف خبر ناموفق: %s", exc)
 
 
-async def finalize_judgment(context: ContextTypes.DEFAULT_TYPE, jid: int):
-    j = db.get_judgment(jid)
-    if not j or j["status"] == "closed":
+async def news_delete_job(context: ContextTypes.DEFAULT_TYPE):
+    await delete_expired_news_by_id(context, context.job.data)
+
+
+async def delete_expired_news_by_id(context: ContextTypes.DEFAULT_TYPE, news_id: int):
+    n = db.get_news(news_id)
+    if not n:
         return
-    # اگر جاب برای تمدید lastcall کنسل‌نشده زودتر اجرا شد، فقط وقتی واقعاً رسید ببند
-    closes_at = datetime.fromisoformat(j["closes_at"])
-    if closes_at > datetime.now() + timedelta(seconds=2):
+    try:
+        expires_at = datetime.fromisoformat(n["expires_at"])
+    except ValueError:
+        expires_at = None
+    if expires_at is not None and expires_at > datetime.now() + timedelta(seconds=2):
         return
 
-    strikes, chances, voters = db.vote_counts(jid)
-    if strikes > chances:
-        winner = "strike"
-    elif chances > strikes:
-        winner = "chance"
-    else:
-        if j["status"] == "open":
-            new_close = datetime.now() + timedelta(minutes=LASTCALL_MINUTES)
-            db.set_judgment_lastcall(jid, new_close.isoformat(timespec="seconds"))
-            j2 = db.get_judgment(jid)
-            text = (
-                f"⚖️ رأی‌ها مساوی شد ({ftext.fa_digits(strikes)} به {ftext.fa_digits(chances)})!\n"
-                f"🚨 این «آخرین فرصت تغییر نظر» است — اگر نتیجه باز مساوی شود، استرایک ثبت می‌شود.\n\n"
-                + judgment_view(j2, strikes, chances, voters)
-            )
-            schedule_judgment_close(context.application, jid, new_close)
-            try:
-                await context.application.bot.edit_message_text(
-                    chat_id=j["chat_id"], message_id=j["message_id"],
-                    text=text, reply_markup=vote_keyboard(jid),
-                )
-            except Exception as exc:
-                logger.warning("ویرایش پیام lastcall ناموفق: %s", exc)
-            return
-        winner = "strike"  # مساوی دوباره → استرایک ثبت می‌شود
-
-    db.close_judgment(jid, winner)
-    votes_line = f"🟥 {ftext.fa_digits(strikes)} — 🟩 {ftext.fa_digits(chances)}   (👥 {ftext.fa_digits(voters)} رأی‌دهنده)"
-
-    if winner == "chance":
-        result_lines = [
-            f"🟩 دادگاه بسته شد: «{j['target_name']}» فرصت دوباره گرفت.",
-            votes_line,
-        ]
-    else:
-        target = Target(j["target_id"], j["target_name"], None, [])
-        admin_name = j["admin_name"] or "دادگاه"
-        stats = record_point(target, j["admin_id"], admin_name, "strike",
-                             j["reason"], j["chat_id"])
-        result_lines = [
-            f"🔨 دادگاه بسته شد: استرایک برای «{j['target_name']}» ثبت شد.",
-            votes_line,
-            "",
-            compact_stats_line(stats),
-        ]
-        result_lines.extend(await maybe_punish(context, j["chat_id"], target, stats))
-
-    result_text = "\n".join(result_lines)
-    delivered = False
-    if j["message_id"]:
+    if n["message_id"]:
         try:
-            await context.application.bot.edit_message_text(
-                chat_id=j["chat_id"], message_id=j["message_id"], text=result_text,
+            await context.application.bot.delete_message(
+                chat_id=n["chat_id"], message_id=n["message_id"],
             )
-            delivered = True
         except Exception as exc:
-            logger.warning("ویرایش پیام نتیجه ناموفق: %s", exc)
-    if not delivered:
-        try:
-            await context.application.bot.send_message(chat_id=j["chat_id"], text=result_text)
-        except Exception as exc:
-            logger.warning("ارسال پیام نتیجه ناموفق: %s", exc)
+            logger.warning("حذف پیام خبر #%s ناموفق: %s", news_id, exc)
 
-
-async def cmd_justice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند تاریخچه‌ی دادگاه را ببینند.")
-        return
-    tokens = list(context.args or [])
-    target = None
-    if tokens or (getattr(msg, "reply_to_message", None) and msg.reply_to_message.from_user):
-        t, error = resolve_target(msg, tokens)
-        if error:
-            await msg.reply_text(error)
-            return
-        target = t
-    if target:
-        rows = db.list_judgments_for(target.user_id, 10)
-        header = f"⚖️ آخرین دادگاه‌های «{target.name}»:"
-    else:
-        rows = db.list_judgments(10, 0)
-        header = "⚖️ آخرین ۱۰ دادگاه:"
-    if not rows:
-        await msg.reply_text("هنوز هیچ دادگاهی برگزار نشده است.")
-        return
-    votes = db.votes_map([r["id"] for r in rows])
-    lines = [header, ""]
-    for i, j in enumerate(rows, start=1):
-        v = votes.get(j["id"], {"strike": 0, "chance": 0})
-        lines.append(_judgment_line(i, j, v))
-    lines.append("")
-    lines.append("برای جزئیات بیشتر از پنل ⚖️ دادگاه‌ها در /menu استفاده کنید.")
-    await msg.reply_text("\n".join(lines))
+    db.delete_news(news_id)
+    logger.info("خبر #%s در چت %s حذف شد (انقضا)", news_id, n["chat_id"])
 
 
 # ---------------------------------------------------------------- ثبت اخطار / استرایک / امتیاز
 
 def record_point(target, admin_id, admin_name, kind: str, reason: str | None, chat_id: int | None):
-    """ثبت رویداد امتیاز (بعد از رأی دادگاه یا مستقیم) و برگرداندن خلاصه‌ی امتیازها."""
+    """ثبت رویداد امتیاز و برگرداندن خلاصه‌ی امتیازها."""
     db.ensure_stub(target.user_id, target.name, target.username)
     db.add_point(
         target_id=target.user_id,
@@ -1398,7 +1072,6 @@ def record_point(target, admin_id, admin_name, kind: str, reason: str | None, ch
         kind=kind,
         reason=reason,
     )
-    # نام و یوزرنیم به‌روز نگه داشته می‌شود
     if target.username or target.name:
         db.upsert_member(target.user_id, target.username, target.name, None)
     return db.summary_for(target.user_id)
@@ -1428,11 +1101,6 @@ async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: st
         admin_id = user.id if user else None
         admin_name = display_name(user) if user else "ادمین"
 
-    # استرایک دیگر مستقیم ثبت نمی‌شود — اول دادگاه رأی‌گیری باز می‌شود
-    if kind == "strike":
-        await court_start(update, context, target, admin_id, admin_name, reason)
-        return
-
     stats = record_point(target, admin_id, admin_name, kind, reason,
                          update.effective_chat.id if update.effective_chat else None)
     meta = KIND_META[kind]
@@ -1461,11 +1129,9 @@ async def cmd_plus(update, context):
 
 async def word_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """روتر کلمه‌های قابل‌تغییر دستورات (مثلاً «اخطار» به‌جای /warn)."""
-    if context.user_data.get("form_flow"):
-        return  # در میانه‌ی فرم افزودن عضو هستیم
     user = update.effective_user
     if user and user.is_bot:
-        return  # پیام‌های ربات‌های دیگر نادیده گرفته می‌شود
+        return
     msg = update.effective_message
     if msg is None or not msg.text:
         return
@@ -1484,323 +1150,6 @@ async def word_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await do_action(update, context, kind)
 
 
-# ---------------------------------------------------------------- مدیریت اعضا
-
-def split_name_age(tokens: list[str]):
-    """آخرین توکن اگر عدد معتبر سن بود، جدا می‌شود؛ بقیه نام است."""
-    toks = list(tokens)
-    age = None
-    if toks:
-        maybe = ftext.to_int(toks[-1])
-        if maybe is not None and 1 <= maybe <= 150:
-            age = maybe
-            toks = toks[:-1]
-    return " ".join(toks).strip(), age
-
-
-def clear_form_state(context) -> None:
-    for key in ("t_id", "t_name", "t_username", "t_fullname", "t_age", "form_flow"):
-        context.user_data.pop(key, None)
-
-
-def format_member_card(target_id: int, member) -> str:
-    name = member["full_name"] if member else f"کاربر {target_id}"
-    lines = [f"👤 {name}", f"🆔 آیدی: {ftext.fa_digits(target_id)}"]
-    if member:
-        if member["username"]:
-            lines.append(f"🔗 یوزرنیم: @{member['username']}")
-        age = member["age"]
-        lines.append(f"🎂 سن: {ftext.fa_digits(age) if age is not None else 'ثبت نشده'}")
-        if member["note"]:
-            lines.append(f"📝 یادداشت: {member['note']}")
-        try:
-            ts = datetime.fromisoformat(member["created_at"])
-            lines.append(f"🗓 تاریخ ثبت: {ftext.fa_datetime(ts)}")
-        except ValueError:
-            pass
-    s = db.summary_for(target_id)
-    lines.append("")
-    lines.append(compact_stats_line(s))
-    return "\n".join(lines)
-
-
-async def addmember_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ورودی «افزودن عضو» — هم دکمه‌ی منو، هم دستور /addmember."""
-    query = update.callback_query
-    if query is not None:
-        await query.answer()
-        if not await is_admin(update, context):
-            await query.edit_message_text("⛔️ فقط ادمین‌ها می‌توانند عضو اضافه کنند.")
-            return ConversationHandler.END
-        context.user_data["form_flow"] = True
-        msg = query.message
-        reply = getattr(msg, "reply_to_message", None)
-        if reply and getattr(reply, "from_user", None):
-            u = reply.from_user
-            context.user_data["t_id"] = u.id
-            context.user_data["t_name"] = display_name(u)
-            context.user_data["t_username"] = (u.username or "").lower() or None
-            await msg.reply_text(
-                f"👤 {context.user_data['t_name']} انتخاب شد.\nحالا نام و نام‌خانوادگی را بفرستید:"
-            )
-            return ASK_NAME
-        await msg.reply_text(
-            "🆔 آیدی عددی کاربر یا @یوزرنیم او را بفرستید\n"
-            "(یا پیام او را به همین پیام ریپلای کنید):"
-        )
-        return ASK_TARGET
-
-    msg = update.effective_message
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند عضو اضافه کنند.")
-        return ConversationHandler.END
-
-    tokens = list(context.args or [])
-
-    # حالت ریپلای یا منشن متنی
-    target = None
-    rest = list(tokens)
-    reply = getattr(msg, "reply_to_message", None)
-    if reply and getattr(reply, "from_user", None):
-        u = reply.from_user
-        target = Target(u.id, display_name(u), (u.username or "").lower() or None, rest)
-    else:
-        for ent in (getattr(msg, "entities", None) or []):
-            if getattr(ent, "type", "") == "text_mention" and getattr(ent, "user", None):
-                u = ent.user
-                target = Target(u.id, display_name(u), (u.username or "").lower() or None, rest)
-                break
-        if target is None and rest:
-            first = rest[0]
-            if re.fullmatch(r"\d{5,}", ftext.to_ascii_digits(first)):
-                uid = int(ftext.to_ascii_digits(first))
-                m = db.get_member(uid)
-                target = Target(uid, m["full_name"] if m else f"کاربر {uid}",
-                                m["username"] if m else None, rest[1:])
-            elif first.startswith("@"):
-                m = db.find_by_username(first)
-                if m:
-                    target = Target(m["user_id"], m["full_name"], m["username"], rest[1:])
-                else:
-                    await msg.reply_text(
-                        f"❌ یوزرنیم {first} ناشناس است.\n"
-                        "لطفاً آیدی عددی بدهید (با /id از خود کاربر بگیرید) یا به پیامش ریپلای کنید."
-                    )
-                    return ConversationHandler.END
-            else:
-                await msg.reply_text(
-                    "❓ روش استفاده:\n"
-                    "/addmember 123456789 علی رضایی 25\n"
-                    "یا ریپلای به پیام کاربر: /addmember علی رضایی 25\n"
-                    "یا فقط /addmember برای فرم مرحله‌به‌مرحله"
-                )
-                return ConversationHandler.END
-
-    if target is not None:
-        rest = target.rest
-        name, age = split_name_age(rest)
-        if not name:
-            context.user_data["form_flow"] = True
-            context.user_data["t_id"] = target.user_id
-            context.user_data["t_name"] = target.name
-            context.user_data["t_username"] = target.username
-            await msg.reply_text(
-                f"👤 هدف: {target.name}\nحالا نام و نام‌خانوادگی را بفرستید:"
-            )
-            return ASK_NAME
-        db.upsert_member(target.user_id, target.username, name, age)
-        card = format_member_card(target.user_id, db.get_member(target.user_id))
-        await msg.reply_text(f"✅ عضو ثبت شد:\n\n{card}")
-        return ConversationHandler.END
-
-    # بدون هیچ آرگومانی → فرم تعاملی
-    context.user_data["form_flow"] = True
-    await msg.reply_text(
-        "🆔 آیدی عددی کاربر یا @یوزرنیم او را بفرستید\n(یا پیامش را به این پیام ریپلای کنید):"
-    )
-    return ASK_TARGET
-
-
-async def ask_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    tokens = (msg.text or "").split()
-    target, error = resolve_target(msg, tokens)
-    if error:
-        await msg.reply_text(error + "\n\n(برای انصراف /cancel)")
-        return ASK_TARGET
-    context.user_data["t_id"] = target.user_id
-    context.user_data["t_name"] = target.name
-    context.user_data["t_username"] = target.username
-    await msg.reply_text(f"👤 هدف: {target.name}\n\nحالا نام و نام‌خانوادگی را بفرستید:")
-    return ASK_NAME
-
-
-async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    name = (msg.text or "").strip()
-    if len(name) < 2 or len(name) > 100:
-        await msg.reply_text("❌ نام باید بین ۲ تا ۱۰۰ نویسه باشد. دوباره بفرستید:")
-        return ASK_NAME
-    context.user_data["t_fullname"] = name
-    await msg.reply_text("🎂 سن کاربر را بفرستید (مثلاً 25) — یا برای رد کردن «-» بفرستید:")
-    return ASK_AGE
-
-
-async def ask_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    text = (msg.text or "").strip()
-    if text in ("-", "—", "ندارم", "skip"):
-        age = None
-    else:
-        age = ftext.to_int(text)
-        if age is None or not (1 <= age <= 150):
-            await msg.reply_text("❌ سن نامعتبر است. عددی بین ۱ تا ۱۵۰ بفرستید (یا «-»):")
-            return ASK_AGE
-    context.user_data["t_age"] = age
-    name = context.user_data["t_fullname"]
-    age_txt = f"{ftext.fa_digits(age)} سال" if age is not None else "ثبت نمی‌شود"
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ ثبت کن", callback_data="form:save"),
-        InlineKeyboardButton("❌ انصراف", callback_data="form:cancel"),
-    ]])
-    await msg.reply_text(
-        f"🧾 پیش‌نمایش:\n«{name}» — {age_txt}\nآیدی: {ftext.fa_digits(context.user_data['t_id'])}\n\nثبت شود؟",
-        reply_markup=keyboard,
-    )
-    return ASK_CONFIRM
-
-
-async def ask_confirm_remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("لطفاً یکی از دکمه‌ها را بزنید: «ثبت کن» یا «انصراف».")
-    return ASK_CONFIRM
-
-
-async def form_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = update.effective_user
-    db.upsert_member(
-        user_id=context.user_data["t_id"],
-        username=context.user_data.get("t_username"),
-        full_name=context.user_data.get("t_fullname") or context.user_data.get("t_name"),
-        age=context.user_data.get("t_age"),
-        added_by=user.id if user else None,
-    )
-    card = format_member_card(context.user_data["t_id"], db.get_member(context.user_data["t_id"]))
-    clear_form_state(context)
-    await query.edit_message_text(f"✅ عضو با موفقیت ثبت شد:\n\n{card}")
-    return ConversationHandler.END
-
-
-async def form_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    clear_form_state(context)
-    await query.edit_message_text("🚫 ثبت عضو لغو شد.")
-    return ConversationHandler.END
-
-
-async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    clear_form_state(context)
-    await update.effective_message.reply_text("🚫 عملیات لغو شد.")
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------- عضویت خودکار اعضا (/join)
-
-async def join_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """هر کاربر می‌تواند خودش را با یوزرنیم واقعی تلگرام خودش ثبت کند."""
-    query = update.callback_query
-    if query is not None:
-        await query.answer()
-        msg = query.message
-    else:
-        msg = update.effective_message
-    user = update.effective_user
-    if user is None or user.is_bot:
-        await msg.reply_text("❌ متاسفانه نتوانستم اکانت تلگرام شما را تشخیص دهم.")
-        return ConversationHandler.END
-
-    existing = db.get_member(user.id)
-    context.user_data["join_id"] = user.id
-    context.user_data["join_username"] = (user.username or "").lower() or None
-    if existing:
-        text = (
-            f"👤 شما از قبل ثبت‌نام کرده‌اید:\n\n{format_member_card(user.id, existing)}\n\n"
-            "اگر می‌خواهید «نام» را تغییر دهید، حالا نام جدید را بفرستید\n"
-            "(یا برای نگه‌داشتن نام فعلی فقط «-» را بفرستید):"
-        )
-    else:
-        text = (
-            f"✍️ ثبت‌نام در ربات — «{display_name(user)}»\n\n"
-            "نام و نام‌خانوادگی‌تان را بفرستید\n"
-            "(برای استفاده از همان نامی که در تلگرام دارید، فقط «-» را بفرستید):"
-        )
-    await msg.reply_text(text)
-    return JOIN_NAME
-
-
-async def join_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    user = update.effective_user
-    text = (msg.text or "").strip()
-    existing = db.get_member(context.user_data.get("join_id", 0)) if context.user_data.get("join_id") else None
-    if text in ("-", "—"):
-        name = (existing["full_name"] if existing else (display_name(user) if user else "عضو")).strip()
-    elif len(text) < 2 or len(text) > 100:
-        await msg.reply_text("❌ نام باید بین ۲ تا ۱۰۰ نویسه باشد. دوباره بفرستید (یا «-»):")
-        return JOIN_NAME
-    else:
-        name = text
-    context.user_data["join_fullname"] = name
-    if existing and existing["age"] is not None:
-        await msg.reply_text(
-            f"🎂 سن فعلی شما: {ftext.fa_digits(existing['age'])} سال\n"
-            "سن جدید را بفرستید (یا «-» برای نگه‌داشتن همین):"
-        )
-    else:
-        await msg.reply_text("🎂 سن شما را بفرستید (مثلاً 25) — یا برای رد کردن «-» را بفرستید:")
-    return JOIN_AGE
-
-
-async def join_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    user = update.effective_user
-    text = (msg.text or "").strip()
-    join_id = context.user_data.get("join_id")
-    if not join_id or not user:
-        await msg.reply_text("❌ خطایی رخ داد. لطفاً دوباره /join را بفرستید.")
-        return ConversationHandler.END
-    existing = db.get_member(join_id)
-    if text in ("-", "—", "ندارم"):
-        age = existing["age"] if existing else None
-    else:
-        age = ftext.to_int(text)
-        if age is None or not (1 <= age <= 150):
-            await msg.reply_text("❌ سن نامعتبر است. عددی بین ۱ تا ۱۵۰ بفرستید (یا «-»):")
-            return JOIN_AGE
-    db.upsert_member(
-        user_id=join_id,
-        username=context.user_data.get("join_username"),
-        full_name=context.user_data.get("join_fullname") or display_name(user),
-        age=age,
-    )
-    fullname = context.user_data.get("join_fullname") or display_name(user)
-    uname = context.user_data.get("join_username")
-    uname_line = f"🔗 یوزرنیم: @{uname}" if uname else "🔗 یوزرنیم: (یوزرنیم ندارید — ناشناس)"
-    age_txt = f"{ftext.fa_digits(age)} سال" if age is not None else "ثبت نشده"
-    for key in ("join_id", "join_username", "join_fullname"):
-        context.user_data.pop(key, None)
-    await msg.reply_text(
-        f"✅ ثبت‌نام شما انجام شد!\n\n"
-        f"👤 {fullname}\n"
-        f"🆔 آیدی: {ftext.fa_digits(user.id)}\n"
-        f"{uname_line}\n"
-        f"🎂 سن: {age_txt}"
-    )
-    return ConversationHandler.END
-
-
 async def cmd_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not await is_admin(update, context):
@@ -1812,191 +1161,6 @@ async def cmd_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     member = db.get_member(target.user_id)
     await msg.reply_text(format_member_card(target.user_id, member))
-
-
-async def cmd_setname(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند نام را تغییر دهند.")
-        return
-    target, error = resolve_target(msg, context.args or [])
-    if error:
-        await msg.reply_text(error)
-        return
-    new_name = " ".join(target.rest).strip()
-    if len(new_name) < 2:
-        await msg.reply_text("❌ نام جدید را بعد از هدف بنویسید. مثال: /setname @ali علی رضایی")
-        return
-    if db.set_name(target.user_id, new_name):
-        await msg.reply_text(f"✅ نام به «{new_name}» تغییر کرد.")
-    else:
-        await msg.reply_text("❌ این کاربر در دیتابیس نیست؛ اول او را ثبت کنید: /addmember")
-
-
-async def cmd_setage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند سن را تغییر دهند.")
-        return
-    tokens = list(context.args or [])
-    # اگر آرگومانی نیست و ریپلای شده، اولین توکن سن است
-    target, error = resolve_target(msg, tokens)
-    if error:
-        await msg.reply_text(error)
-        return
-    if len(target.rest) != 1:
-        await msg.reply_text("❌ مثال: /setage @ali 25 (یا ریپلای + /setage 25)")
-        return
-    age = ftext.to_int(target.rest[0])
-    if age is None or not (1 <= age <= 150):
-        await msg.reply_text("❌ سن باید عددی بین ۱ تا ۱۵۰ باشد.")
-        return
-    if db.set_age(target.user_id, age):
-        await msg.reply_text(f"✅ سن {ftext.fa_digits(age)} سال ثبت شد.")
-    else:
-        await msg.reply_text("❌ این کاربر در دیتابیس نیست؛ اول او را ثبت کنید: /addmember")
-
-
-async def cmd_delmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند عضو حذف کنند.")
-        return
-    target, error = resolve_target(msg, context.args or [])
-    if error:
-        await msg.reply_text(error)
-        return
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🗑 بله، حذف کن", callback_data=f"confirm_del:{target.user_id}"),
-        InlineKeyboardButton("❌ انصراف", callback_data="del_cancel"),
-    ]])
-    await msg.reply_text(
-        f"حذف «{target.name}» از دیتابیس؟\n(تاریخچه‌ی امتیازها نگه داشته می‌شود)",
-        reply_markup=keyboard,
-    )
-
-
-async def del_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not await is_admin(update, context):
-        await query.edit_message_text("⛔️ فقط ادمین‌ها می‌توانند حذف کنند.")
-        return
-    if query.data == "del_cancel":
-        await query.edit_message_text("🚫 حذف لغو شد.")
-        return
-    m = re.fullmatch(r"confirm_del:(\d+)", query.data or "")
-    if not m:
-        return
-    uid = int(m.group(1))
-    if db.delete_member(uid):
-        await query.edit_message_text("✅ عضو حذف شد. تاریخچه‌ی امتیازها حفظ شد.")
-    else:
-        await query.edit_message_text("❌ این عضو در دیتابیس نبود.")
-
-
-def build_list_page(page: int):
-    total = db.count_members()
-    if total == 0:
-        return "هنوز عضوی ثبت نشده است.\nبرای افزودن: /addmember", None
-    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
-    page = max(0, min(page, total_pages - 1))
-    rows = db.list_members(limit=PAGE_SIZE, offset=page * PAGE_SIZE)
-    stats = db.stats_map([m["user_id"] for m in rows])   # یک کوئری گروهی به‌جای ۸ کوئری
-    lines = [f"📋 لیست اعضا — صفحه {ftext.fa_digits(page + 1)} از {ftext.fa_digits(total_pages)} (کل: {ftext.fa_digits(total)} نفر)", ""]
-    for i, m in enumerate(rows, start=page * PAGE_SIZE + 1):
-        uname = f" — @{m['username']}" if m["username"] else ""
-        age = f"{ftext.fa_digits(m['age'])} سال" if m["age"] is not None else "سن: نامشخص"
-        s = stats[m["user_id"]]
-        sign = "+" if s["final"] > 0 else ""
-        lines.append(
-            f"{ftext.fa_digits(i)}. {m['full_name']}{uname} — {age} — 🏁 {sign}{ftext.fa_digits(s['final'])}"
-        )
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("‹ صفحه قبل", callback_data=f"menu:list:{page - 1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("صفحه بعد ›", callback_data=f"menu:list:{page + 1}"))
-    keyboard_rows = []
-    if nav:
-        keyboard_rows.append(nav)
-    keyboard_rows.append([
-        InlineKeyboardButton("↩️ بازگشت", callback_data="menu:back"),
-        InlineKeyboardButton("❌ بستن", callback_data="menu:close"),
-    ])
-    return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
-
-
-async def cmd_listmembers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند لیست اعضا را ببینند.")
-        return
-    text, keyboard = build_list_page(0)
-    await msg.reply_text(text, reply_markup=keyboard)
-
-
-# ---------------------------------------------------------------- تغییر کلمه‌های دستورات
-
-_WORD_KIND_ALIASES = {
-    "warn": "warn", "اخطار": "warn",
-    "strike": "strike", "استرایک": "strike",
-    "plus": "plus", "پلاس": "plus", "امتیاز": "plus",
-}
-
-_WORDS_HINT = (
-    "⚙️ تنظیم کلمه‌های دستورات (فقط ادمین اصلی):\n\n"
-    "/setword warn کلمهٔ_جدید\n"
-    "/setword strike کلمهٔ_جدید\n"
-    "/setword plus کلمهٔ_جدید\n\n"
-    "مثال: /setword warn حمله\n"
-    "نکته: کلمه‌ی جدید باید یک «کلمه» باشد، نه جمله. /warn و /strike و /plus همیشه کار می‌کنند."
-)
-
-
-def words_summary() -> str:
-    w = db.get_words()
-    return (
-        "⚙️ کلمه‌های فعلی دستورات:\n\n"
-        f"🟡 اخطار   → «{w['warn']}»   (یا /warn)\n"
-        f"🔴 استرایک → «{w['strike']}»   (یا /strike)\n"
-        f"🟢 مثبت    → «{w['plus']}»   (یا /plus)"
-    )
-
-
-async def cmd_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_master(update, context):
-        await update.effective_message.reply_text("⛔️ این دستور فقط برای ادمین اصلی است.")
-        return
-    await update.effective_message.reply_text(words_summary() + "\n\n" + _WORDS_HINT)
-
-
-async def cmd_setword(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not await is_master(update, context):
-        await msg.reply_text("⛔️ این دستور فقط برای ادمین اصلی است.")
-        return
-    args = list(context.args or [])
-    if len(args) != 2:
-        await msg.reply_text(
-            "❌ فرمت درست:\n/setword warn کلمهٔ_جدید\n/setword strike کلمهٔ_جدید\n/setword plus کلمهٔ_جدید\n\nمثال: /setword warn حمله"
-        )
-        return
-    kind = _WORD_KIND_ALIASES.get(args[0].strip().lower())
-    new_word = args[1].strip()
-    if kind is None:
-        await msg.reply_text("❌ نوع دستور باید یکی از این‌ها باشد: warn | strike | plus")
-        return
-    if new_word.startswith("/") or "@" in new_word or len(new_word) > 32:
-        await msg.reply_text("❌ کلمه‌ی جدید نامعتبر است (بدون @ و / و حداکثر ۳۲ نویسه).")
-        return
-    current = db.get_words()
-    for other_kind in ("warn", "strike", "plus"):
-        if other_kind != kind and current[other_kind] == new_word:
-            await msg.reply_text(f"❌ این کلمه در حال حاضر برای «{KIND_META[other_kind]['label']}» استفاده می‌شود.")
-            return
-    db.set_setting(f"word_{kind}", new_word)
-    await msg.reply_text(f"✅ کلمه‌ی دستور «{KIND_META[kind]['label']}» به «{new_word}» تغییر کرد.\n\n{words_summary()}")
 
 
 # ---------------------------------------------------------------- منوی دکمه‌ای
@@ -2029,11 +1193,24 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu:all":
         await query.edit_message_text(build_all_report(), reply_markup=back_keyboard())
         return
-    if data == "menu:words":
+    if data == "menu:news":
         if not master:
-            await query.edit_message_text("⛔️ تنظیم کلمه‌ها فقط برای ادمین اصلی است.", reply_markup=back_keyboard())
+            await query.edit_message_text("⛔️ خبر روز فقط برای ادمین اصلی است.", reply_markup=back_keyboard())
             return
-        await query.edit_message_text(words_summary() + "\n\n" + _WORDS_HINT, reply_markup=back_keyboard())
+        # نمایش خبر فعال در چت فعلی
+        chat = update.effective_chat
+        current = db.get_active_news(chat.id) if chat else None
+        if current:
+            try:
+                expires = ftext.fa_datetime(datetime.fromisoformat(current["expires_at"]))
+            except ValueError:
+                expires = current["expires_at"]
+            await query.edit_message_text(
+                f"📢 خبر فعلی:\n\n{current['content']}\n\n⏳ تا: {expires}",
+                reply_markup=back_keyboard(),
+            )
+        else:
+            await query.edit_message_text("❓ خبر فعالی ثبت نشده است.", reply_markup=back_keyboard())
         return
     if data == "menu:ranking":
         text, keyboard = build_ranking_panel()
@@ -2047,10 +1224,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = build_stats_ranking(viewer_id)
         await query.edit_message_text(text, reply_markup=back_keyboard())
         return
-    if data == "menu:justice":
-        text, keyboard = build_justice_panel()
-        await query.edit_message_text(text, reply_markup=keyboard)
-        return
     if data == "menu:stats":
         text, keyboard = build_stats_panel()
         await query.edit_message_text(text, reply_markup=keyboard)
@@ -2060,33 +1233,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, keyboard = build_all_stats(int(m.group(1)))
         await query.edit_message_text(text, reply_markup=keyboard)
         return
-    if data == "menu:justice:open":
-        text, keyboard = build_justice_open()
-        await query.edit_message_text(text, reply_markup=keyboard)
-        return
-    m = re.fullmatch(r"menu:justice:hist:(\d+)", data)
-    if m:
-        text, keyboard = build_justice_history(int(m.group(1)))
-        await query.edit_message_text(text, reply_markup=keyboard)
-        return
-    m = re.fullmatch(r"menu:list:(\d+)", data)
-    if m:
-        text, keyboard = build_list_page(int(m.group(1)))
-        await query.edit_message_text(text, reply_markup=keyboard)
-        return
 
 
 # ---------------------------------------------------------------- شروع برنامه
 
 async def on_start(app):
-    """رأی‌گیری‌های نیمه‌کاره بعد از ری‌استارت بازیابی می‌شوند."""
-    recovered = db.open_judgments()
-    for j in recovered:
-        closes = datetime.fromisoformat(j["closes_at"])
-        when = max(closes, datetime.now() + timedelta(seconds=2))
-        schedule_judgment_close(app, j["id"], when)
-    if recovered:
-        logger.info("%d رأی‌گیری نیمه‌کاره بازیابی شد", len(recovered))
+    """پیشنهادهای آمار نیمه‌کاره بعد از ری‌استارت بازیابی می‌شوند."""
     proposals = db.open_proposals()
     for p in proposals:
         closes = datetime.fromisoformat(p["closes_at"])
@@ -2095,13 +1247,25 @@ async def on_start(app):
     if proposals:
         logger.info("%d پیشنهاد آمار نیمه‌کاره بازیابی شد", len(proposals))
 
+    # خبرهای منقضی‌شده را بعد از ری‌استارت پاک می‌کنیم
+    expired = db.list_expired_news()
+    for n in expired:
+        if n["message_id"]:
+            try:
+                await app.bot.delete_message(
+                    chat_id=n["chat_id"], message_id=n["message_id"],
+                )
+            except Exception:
+                pass
+        db.delete_news(n["id"])
+    if expired:
+        logger.info("%d خبر منقضی‌شده بعد از ری‌استارت پاک شد", len(expired))
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    # دکمه‌ای که محتوای یکسان را دوباره نمایش می‌دهد → خطا را نادیده بگیر
     if isinstance(context.error, BadRequest) and "not modified" in str(context.error).lower():
         logger.debug("پیامی تغییر نکرد — نادیده گرفته شد")
         return
-    # خطاهای شبکه: پیام دوستانه به‌جای «خطای داخلی»
     if isinstance(context.error, (NetworkError, TimedOut)):
         logger.warning("مشکل شبکه: %s", context.error)
         try:
@@ -2121,12 +1285,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main() -> None:
-    # Python 3.14+ دیگر لوپ جدید به‌صورت خودکار نمی‌سازد؛ صراحتاً می‌سازیم
     import asyncio
 
     asyncio.set_event_loop(asyncio.new_event_loop())
 
-    # تایم‌اوت‌های طولانی‌تر برای اینترنت‌های ناپایدار (پیش‌فرض تلگرام ۵ ثانیه است)
     request = HTTPXRequest(
         connection_pool_size=16,
         connect_timeout=20.0,
@@ -2155,67 +1317,33 @@ def main() -> None:
     )
     app.add_handler(ability_conversation)
 
-    join_conversation = ConversationHandler(
-        entry_points=[
-            CommandHandler("join", join_entry),
-            CallbackQueryHandler(join_entry, pattern="^join:start$"),
-        ],
-        states={
-            JOIN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, join_name)],
-            JOIN_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, join_age)],
-        },
-        fallbacks=[CommandHandler("cancel", conv_cancel)],
-        allow_reentry=True,
-    )
-    app.add_handler(join_conversation)
-
-    conversation = ConversationHandler(
-        entry_points=[
-            CommandHandler("addmember", addmember_entry),
-            CallbackQueryHandler(addmember_entry, pattern="^menu:add$"),
-        ],
-        states={
-            ASK_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_target)],
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-            ASK_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_age)],
-            ASK_CONFIRM: [
-                CallbackQueryHandler(form_save, pattern="^form:save$"),
-                CallbackQueryHandler(form_cancel, pattern="^form:cancel$"),
-                MessageHandler(filters.ALL, ask_confirm_remind),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", conv_cancel),
-            CallbackQueryHandler(form_cancel, pattern="^form:cancel$"),
-        ],
-        allow_reentry=True,
-    )
-    app.add_handler(conversation)
-
     simple_commands = [
         ("start", cmd_start), ("help", cmd_help), ("id", cmd_id), ("panel", cmd_panel), ("menu", cmd_menu),
         ("mypoints", cmd_mypoints), ("points", cmd_points), ("report", cmd_report),
-        ("history", cmd_history), ("justice", cmd_justice), ("member", cmd_member),
+        ("history", cmd_history), ("member", cmd_member),
         ("stats", cmd_stats), ("mystats", cmd_mystats), ("stat", cmd_stat), ("allstats", cmd_allstats),
         ("ranking", cmd_ranking), ("statsranking", cmd_statsranking),
-        ("listmembers", cmd_listmembers), ("setname", cmd_setname), ("setage", cmd_setage),
-        ("delmember", cmd_delmember), ("words", cmd_words), ("setword", cmd_setword),
         ("warn", cmd_warn), ("strike", cmd_strike), ("plus", cmd_plus),
+        ("news", cmd_news),
     ]
     for name, handler in simple_commands:
         app.add_handler(CommandHandler(name, handler))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, word_router), group=1)
     app.add_handler(CallbackQueryHandler(stat_vote_callback, pattern=r"^svote:(approve|reject|close):\d+$"))
-    app.add_handler(CallbackQueryHandler(vote_callback, pattern=r"^jvote:(strike|chance|close):\d+$"))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:(close|back|help|all|words|justice(:open|:hist:\d+)?|stats(:all:\d+)?|ranking(:points|:stats)?|list:\d+)$"))
-    app.add_handler(CallbackQueryHandler(del_callback, pattern=r"^(confirm_del:\d+|del_cancel)$"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:(close|back|help|all|news|ranking(:points|:stats)?|stats(:all:\d+)?)$"))
+    app.add_handler(CallbackQueryHandler(ability_entry, pattern="^ability:prompt$"))
 
     app.add_error_handler(error_handler)
     logger.info("ربات در حال اجراست… (برای خروج: Ctrl+C)")
     app.run_polling(drop_pending_updates=True, poll_interval=0.5, timeout=30)
 
 
+async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.effective_message.reply_text("🚫 عملیات لغو شد.")
+    return ConversationHandler.END
+
+
 if __name__ == "__main__":
     main()
-

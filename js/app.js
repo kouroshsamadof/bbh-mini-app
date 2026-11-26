@@ -51,7 +51,7 @@ const loadLocalState = () => {
   try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || null; } catch (e) { return null; }
 };
 const saveLocalState = (s) => { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
-const defaultLocalState = () => ({ members: [], meId: null, judgments: [] });
+const defaultLocalState = () => ({ members: [], meId: null, judgments: [], news: null });
 
 const apiCall = async (path, opts = {}) => {
   if (!IN_TELEGRAM) return null;
@@ -114,6 +114,26 @@ async function refreshState() {
     }
   } catch (e) { /* snapshot هم در دسترس نیست */ }
   return state.members.length > 0;
+}
+
+async function fetchNews() {
+  if (!IN_TELEGRAM) {
+    // حالت محلی — اگر در localStorage خبری ذخیره شده است، نمایش بده
+    return state.news || null;
+  }
+  try {
+    const res = await apiCall('/api/news');
+    if (res && res.news) {
+      state.news = res.news;
+      saveLocalState(state);
+      return res.news;
+    }
+    state.news = null;
+    saveLocalState(state);
+    return null;
+  } catch (e) {
+    return state.news || null;
+  }
 }
 
 const MEMBERS = state.members;
@@ -350,6 +370,36 @@ function renderCourt() {
       }).join('');
 }
 
+/* ---------------------------------------------------------- خبر روز */
+function renderNews() {
+  const n = state.news;
+  const box = $('#newsBox');
+  if (!box) return;
+
+  if (!n) {
+    box.innerHTML = `<div class="empty-state">📭 خبر فعالی ثبت نشده است.</div>`;
+    return;
+  }
+
+  let expiresStr = '—';
+  try {
+    const exp = new Date(n.expires_at || 0);
+    if (!isNaN(exp.getTime())) {
+      expiresStr = exp.toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+  } catch (e) { /* ok */ }
+
+  box.innerHTML = `
+    <div class="news-card">
+      <div class="news-head">
+        <span class="news-tag">📢 خبر روز</span>
+        <span class="news-by">توسط ${escapeHtml(n.admin_name || 'ادمین')}</span>
+      </div>
+      <div class="news-body">${escapeHtml(n.content)}</div>
+      <div class="news-foot">⏳ تا ${expiresStr}</div>
+    </div>`;
+}
+
 /* ---------------------------------------------------------- اعضا + افزودن عضو */
 function renderMembers() {
   $('#memberCount').textContent = toFa(MEMBERS.length) + ' نفر';
@@ -443,6 +493,7 @@ function renderAll() {
   renderRankings();
   renderCourt();
   renderMembers();
+  renderNews();
 }
 
 function bindEvents() {
@@ -491,6 +542,9 @@ async function init() {
   }
   const bar = document.getElementById('offlineBar');
   if (bar) bar.style.display = IN_TELEGRAM && !online ? 'block' : 'none';
+
+  // خبر روز را از سرور ربات اصلی بگیر
+  try { await fetchNews(); } catch (e) { console.error('fetchNews failed:', e); }
 
   updateTopBar();
   safeRenderAll();
