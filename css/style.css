@@ -234,6 +234,20 @@ main { max-width: 560px; margin: 0 auto; padding: 12px; }
 .news-body { font-size: 16px; font-weight: 700; line-height: 1.7; margin-bottom: 10px; white-space: pre-wrap; }
 .news-foot { font-size: 12px; opacity: .8; border-top: 1px solid rgba(255,255,255,.3); padding-top: 8px; }
 
+/* ---------- رأی‌گیری استرایک ---------- */
+.strike-card {
+  background: linear-gradient(135deg, #4a1515, #7f1d1d 60%, #991b1b);
+  color: #fff; border-radius: var(--radius); padding: 16px; margin-top: 10px; box-shadow: var(--shadow);
+}
+.strike-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.strike-tag { font-size: 11px; opacity: .9; background: rgba(255,255,255,.18); border-radius: 999px; padding: 4px 10px; font-weight: 800; }
+.strike-by { font-size: 11px; opacity: .85; }
+.strike-target { font-size: 16px; font-weight: 900; margin-bottom: 8px; }
+.strike-reason { font-size: 13px; opacity: .85; margin-bottom: 8px; }
+.strike-stats { display: flex; gap: 12px; margin-bottom: 8px; font-size: 13px; font-weight: 700; }
+.strike-stat { background: rgba(255,255,255,.14); border-radius: 999px; padding: 4px 10px; }
+.strike-foot { font-size: 12px; opacity: .8; border-top: 1px solid rgba(255,255,255,.3); padding-top: 8px; }
+
 .empty-state { text-align: center; color: var(--muted); padding: 26px 10px; font-size: 13px; line-height: 1.9; }
 
 /* ---------- نوار پایین ---------- */

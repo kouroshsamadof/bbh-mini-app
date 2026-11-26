@@ -51,7 +51,7 @@ const loadLocalState = () => {
   try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || null; } catch (e) { return null; }
 };
 const saveLocalState = (s) => { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
-const defaultLocalState = () => ({ members: [], meId: null, judgments: [], news: null });
+const defaultLocalState = () => ({ members: [], meId: null, judgments: [], news: null, strikeVotes: [] });
 
 const apiCall = async (path, opts = {}) => {
   if (!IN_TELEGRAM) return null;
@@ -133,6 +133,25 @@ async function fetchNews() {
     return null;
   } catch (e) {
     return state.news || null;
+  }
+}
+
+async function fetchStrikeVotes() {
+  if (!IN_TELEGRAM) {
+    return state.strikeVotes || [];
+  }
+  try {
+    const res = await apiCall('/api/strike-votes');
+    if (res && Array.isArray(res.votes)) {
+      state.strikeVotes = res.votes;
+      saveLocalState(state);
+      return res.votes;
+    }
+    state.strikeVotes = [];
+    saveLocalState(state);
+    return [];
+  } catch (e) {
+    return state.strikeVotes || [];
   }
 }
 
@@ -400,6 +419,43 @@ function renderNews() {
     </div>`;
 }
 
+/* ---------------------------------------------------------- رأی‌گیری استرایک */
+function renderStrikeVotes() {
+  const box = $('#strikeVoteBox');
+  if (!box) return;
+  const votes = state.strikeVotes || [];
+  if (votes.length === 0) {
+    box.innerHTML = `<div class="empty-state">⚖️ هیچ رأی‌گیری استرایک بازی وجود ندارد.</div>`;
+    return;
+  }
+  box.innerHTML = votes.map(v => {
+    const strikes = v.strikes || 0;
+    const clears = v.clears || 0;
+    const voters = v.voters || 0;
+    let expiresStr = '—';
+    try {
+      const exp = new Date(v.closes_at || 0);
+      if (!isNaN(exp.getTime())) {
+        expiresStr = exp.toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+    } catch (e) { /* ok */ }
+    return `<div class="strike-card">
+      <div class="strike-head">
+        <span class="strike-tag">🔴 استرایک</span>
+        <span class="strike-by">توسط ${escapeHtml(v.proposer_name || 'ادمین')}</span>
+      </div>
+      <div class="strike-target">⚖️ «${escapeHtml(v.target_name || '—')}»</div>
+      ${v.reason ? `<div class="strike-reason">💬 ${escapeHtml(v.reason)}</div>` : ''}
+      <div class="strike-stats">
+        <span class="strike-stat strike">🔴 استرایک: ${toFa(strikes)}</span>
+        <span class="strike-stat clear">🟢 پاک کردن: ${toFa(clears)}</span>
+        <span class="strike-stat">👥 ${toFa(voters)}</span>
+      </div>
+      <div class="strike-foot">⏳ تا ${expiresStr}</div>
+    </div>`;
+  }).join('');
+}
+
 /* ---------------------------------------------------------- اعضا + افزودن عضو */
 function renderMembers() {
   $('#memberCount').textContent = toFa(MEMBERS.length) + ' نفر';
@@ -494,6 +550,7 @@ function renderAll() {
   renderCourt();
   renderMembers();
   renderNews();
+  renderStrikeVotes();
 }
 
 function bindEvents() {
@@ -545,6 +602,9 @@ async function init() {
 
   // خبر روز را از سرور ربات اصلی بگیر
   try { await fetchNews(); } catch (e) { console.error('fetchNews failed:', e); }
+
+  // رأی‌گیری‌های استرایک فعال را از سرور بگیر
+  try { await fetchStrikeVotes(); } catch (e) { console.error('fetchStrikeVotes failed:', e); }
 
   updateTopBar();
   safeRenderAll();

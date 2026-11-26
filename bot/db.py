@@ -90,6 +90,35 @@ CREATE TABLE IF NOT EXISTS news (
 CREATE INDEX IF NOT EXISTS idx_news_chat ON news(chat_id);
 CREATE INDEX IF NOT EXISTS idx_news_expires ON news(expires_at);
 
+CREATE TABLE IF NOT EXISTS strike_votes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     INTEGER NOT NULL,
+    target_id   INTEGER NOT NULL,
+    target_name TEXT,
+    proposer_id INTEGER,
+    proposer_name TEXT,
+    reason      TEXT,
+    status      TEXT NOT NULL DEFAULT 'open',   -- open | closed
+    winner      TEXT,                           -- strike | cleared
+    message_id  INTEGER,
+    created_at  TEXT NOT NULL,
+    closes_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strike_votes_chat ON strike_votes(chat_id);
+CREATE INDEX IF NOT EXISTS idx_strike_votes_status ON strike_votes(status);
+CREATE INDEX IF NOT EXISTS idx_strike_votes_target ON strike_votes(target_id);
+
+CREATE TABLE IF NOT EXISTS strike_vote_votes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    strike_id     INTEGER NOT NULL REFERENCES strike_votes(id) ON DELETE CASCADE,
+    user_id       INTEGER NOT NULL,
+    user_name     TEXT,
+    vote          TEXT NOT NULL CHECK (vote IN ('strike', 'clear')),
+    created_at    TEXT NOT NULL,
+    UNIQUE(strike_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_strike_vote_votes_strike ON strike_vote_votes(strike_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -407,6 +436,113 @@ class Database:
     def delete_news(self, news_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM news WHERE id = ?", (news_id,))
+
+    # ---------- حذف المباشرة‌ی استرایک (حذف یک استرایک از کاربر) ----------
+
+    def remove_strike(self, target_id: int, reason: str | None = None,
+                      admin_id: int | None = None, admin_name: str | None = None,
+                      chat_id: int | None = None) -> dict | None:
+        """حذف یک استرایک از کاربر — اضافه کردن یک نוקט from type='strike' با delta=-3."""
+        m = self.get_member(target_id)
+        if not m:
+            return None
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO points(target_id, target_name, chat_id, admin_id, admin_name,
+                                   type, delta, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, 'strike', -3, ?, ?)
+                """,
+                (target_id, m["full_name"], chat_id, admin_id, admin_name,
+                 reason or "حذف استرایک", now),
+            )
+        self._invalidate_agg()
+        return self.summary_for(target_id)
+
+    # ---------- رأی‌گیری استرایک (strike voting) ----------
+
+    def create_strike_vote(self, chat_id: int, target_id: int, target_name: str,
+                           proposer_id: int | None, proposer_name: str | None,
+                           reason: str | None, closes_at: str, message_id: int | None = None) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """
+                INSERT INTO strike_votes(chat_id, target_id, target_name, proposer_id,
+                                         proposer_name, reason, status, message_id,
+                                         created_at, closes_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+                """,
+                (chat_id, target_id, target_name, proposer_id, proposer_name,
+                 reason, message_id, _now(), closes_at),
+            )
+        return int(cur.lastrowid)
+
+    def get_strike_vote(self, strike_id: int):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM strike_votes WHERE id = ?", (strike_id,)
+            ).fetchone()
+        return row
+
+    def open_strike_votes(self) -> list[sqlite3.Row]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM strike_votes WHERE status = 'open' ORDER BY id DESC"
+            ).fetchall()
+        return list(rows)
+
+    def open_strike_vote_for(self, chat_id: int, target_id: int):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM strike_votes WHERE chat_id = ? AND target_id = ? AND status = 'open'",
+                (chat_id, target_id),
+            ).fetchone()
+
+    def set_strike_vote_message(self, strike_id: int, message_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE strike_votes SET message_id = ? WHERE id = ?", (message_id, strike_id)
+            )
+
+    def upsert_strike_vote(self, strike_id: int, user_id: int, user_name: str | None,
+                           vote: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO strike_vote_votes(strike_id, user_id, user_name, vote, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(strike_id, user_id) DO UPDATE SET
+                    vote       = excluded.vote,
+                    user_name  = excluded.user_name,
+                    created_at = excluded.created_at
+                """,
+                (strike_id, user_id, user_name, vote, _now()),
+            )
+
+    def strike_vote_counts(self, strike_id: int) -> tuple[int, int, int]:
+        """خروجی: (رأی برای استرایک، رأی برای پاک کردن، مجموع رأی‌دهندگان)"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT vote, COUNT(*) AS c FROM strike_vote_votes WHERE strike_id = ? GROUP BY vote",
+                (strike_id,),
+            ).fetchall()
+        counts = {r["vote"]: r["c"] for r in rows}
+        return counts.get("strike", 0), counts.get("clear", 0), sum(counts.values())
+
+    def close_strike_vote(self, strike_id: int, winner: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE strike_votes SET status = 'closed', winner = ? WHERE id = ?",
+                (winner, strike_id),
+            )
+
+    def list_strike_votes(self, limit: int = 10, offset: int = 0) -> list[sqlite3.Row]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM strike_votes ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)
+            ).fetchall()
+        return list(rows)
 
     # ---------- آمار اعضا ----------
 

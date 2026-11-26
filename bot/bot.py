@@ -2,6 +2,8 @@
 
 قابلیت‌ها:
   • ثبت اخطار (۱-)، استرایک (۳-) و امتیاز مثبت (۱+) توسط ادمین‌ها
+  • رأی‌گیری استرایک با حذف خودکار بعد از مهلت
+  • حذف مستقیم استرایک (Unstrike) توسط ادمین‌ها
   • گزارش نهایی هر عضو با تفکیک کامل محاسبات
   • رتبه‌بندی و آمار اعضاء (۰ تا ۱۰۰)
   • capacidad persoonли (توانایی شخصی)
@@ -12,7 +14,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatPermissions
 from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
@@ -50,8 +52,15 @@ KIND_META = {
 # خبر روز — خود حذف شدن بعد از ۲۴ ساعت
 NEWS_HOURS = 24
 
+# رأی‌گیری استرایک
+STRIKE_VOTE_MINUTES = 5
+
 # رأی‌گیری آمار
 STAT_VOTE_MINUTES = 5
+
+# مجازات‌های استرایک
+STRIKE_MUTE_LIMIT = 3   # ۳ استرایک باقی‌مانده → میوت ۱ روزه
+STRIKE_BAN_LIMIT = 5    # ۵ استرایک باقی‌مانده → اخراج
 
 
 # ---------------------------------------------------------------- ابزارها
@@ -71,14 +80,13 @@ def posted_as_chat(update: Update) -> bool:
     return bool(sc and chat and sc.id == chat.id and chat.type in ("channel", "group", "supergroup"))
 
 
-# کش وضعیت ادمینی برای جلوگیری از صدا زدن API تلگرام روی هر پیام
+# کش وضعیت ادمینی
 _admin_cache: dict[tuple[int, int], tuple[bool, float]] = {}
-_ADMIN_TTL = 120.0          # ۲ دقیقه
-_ADMIN_CACHE_MAX = 512      # سقف اندازه کش
+_ADMIN_TTL = 120.0
+_ADMIN_CACHE_MAX = 512
 
 
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """ادمین اصلی (کانفیگ) یا هر ادمین همان گروه/کانال — با کش ۲ دقیقه‌ای."""
     user = update.effective_user
     if user:
         uname = (user.username or "").lower()
@@ -102,7 +110,7 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         member = await context.bot.get_chat_member(chat.id, user.id)
         st = getattr(member.status, "value", str(member.status)).lower()
         ok = st in ("creator", "owner", "administrator")
-    except Exception as exc:  # ربات عضو/ادمین آن چت نیست یا خطای شبکه
+    except Exception as exc:
         logger.warning("get_chat_member failed: %s", exc)
         ok = False
     if len(_admin_cache) >= _ADMIN_CACHE_MAX:
@@ -112,7 +120,6 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
 
 async def is_master(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """فقط ادمین‌های اصلیِ تعریف‌شده در کانفیگ (یا پست به نام کانال)."""
     user = update.effective_user
     if user:
         uname = (user.username or "").lower()
@@ -132,36 +139,25 @@ class Target:
 
 
 def resolve_target(msg, tokens: list[str]):
-    """هدف دستور را پیدا می‌کند.
-
-    ترتیب اولویت: ریپلای به پیام  ←  منشن متنی (text_mention)  ←  اولین توکن (@یوزرنیم یا آیدی عددی)
-    خروجی: (Target, None) یا (None, پیام خطا)
-    """
     rest = list(tokens)
-
     reply = getattr(msg, "reply_to_message", None)
     if reply and getattr(reply, "from_user", None):
         u = reply.from_user
         return Target(u.id, display_name(u), (u.username or "").lower() or None, rest), None
-
     for ent in (getattr(msg, "entities", None) or []):
         if getattr(ent, "type", "") == "text_mention" and getattr(ent, "user", None):
             u = ent.user
             return Target(u.id, display_name(u), (u.username or "").lower() or None, rest), None
-
     if not rest:
         return None, "❓ هدف مشخص نیست!\nبه پیام کاربر ریپلای کنید، یا آیدی عددی / @یوزرنیم بنویسید."
-
     first = rest[0]
     ascii_num = ftext.to_ascii_digits(first)
-
     if re.fullmatch(r"\d{5,}", ascii_num):
         uid = int(ascii_num)
         m = db.get_member(uid)
         name = m["full_name"] if m else f"کاربر {uid}"
         username = m["username"] if m else None
         return Target(uid, name, username, rest[1:]), None
-
     if first.startswith("@"):
         uname = first[1:].lower()
         m = db.find_by_username(uname)
@@ -171,7 +167,6 @@ def resolve_target(msg, tokens: list[str]):
             f"❌ کاربری با یوزرنیم {first} در دیتابیس نیست.\n"
             f"اول او را ثبت کنید (از طریق ربات اصلی یا Mini App)."
         )
-
     return None, (
         "❓ نتوانستم هدف را تشخیص دهم.\n"
         "روش‌ها: ریپلای به پیام کاربر، یا نوشتن @یوزرنیم، یا آیدی عددی.\n"
@@ -180,7 +175,6 @@ def resolve_target(msg, tokens: list[str]):
 
 
 def identity_for(target_id: int, fallback_name: str | None = None):
-    """نام نمایشی و رکورد عضو برای یک آیدی — حتی اگر عضو حذف شده باشد."""
     m = db.get_member(target_id)
     if m:
         return m["full_name"], m
@@ -193,7 +187,6 @@ def identity_for(target_id: int, fallback_name: str | None = None):
 def build_report(target_id: int, preferred_name: str | None = None) -> str:
     name, member = identity_for(target_id, preferred_name)
     s = db.summary_for(target_id)
-
     lines = [f"📊 گزارش امتیازها — «{name}»", f"🆔 آیدی: {ftext.fa_digits(target_id)}"]
     if member:
         if member["username"]:
@@ -252,8 +245,7 @@ def main_menu_keyboard(master: bool) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("📊 گزارش همه", callback_data="menu:all"),
          InlineKeyboardButton("📈 آمار اعضا", callback_data="menu:stats")],
-        [InlineKeyboardButton("🏆 رتبه‌بندی", callback_data="menu:ranking"),
-         InlineKeyboardButton("❓ راهنما", callback_data="menu:help")],
+        [InlineKeyboardButton("🏆 رتبه‌بندی", callback_data="menu:ranking")],
     ]
     if master:
         rows.append([InlineKeyboardButton("📢 خبر روز", callback_data="menu:news")])
@@ -261,68 +253,7 @@ def main_menu_keyboard(master: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-HELP_TEXT = """❓ راهنمای ربات مدیریت امتیاز BBH
-
-🎯 هدف ربات: ثبت اخطار/استرایک/امتیاز مثبت برای اعضا، و محاسبه‌ی امتیاز نهایی با قوانین پاک‌سازی.
-
-📌 ثبت امتیاز (فقط ادمین‌ها):
-به پیام کاربر ریپلای کنید و یکی از این‌ها را بنویسید:
-• اخطار — ثبت اخطار (۱ امتیاز منفی)
-• استرایک — ثبت استرایک (۳ امتیاز منفی)
-• امتیاز — ثبت امتیاز مثبت (۱ امتیاز مثبت)
-
-بدون ریپلای هم می‌شود، با آیدی یا یوزرنیم:
-• اخطار @ali دلیل تخلف
-• استرایک 123456789 توهین
-• امتیاز @ali همکاری خوب
-
-(به‌جای کلمه‌های فارسی می‌توانید از /warn ، /strike و /plus هم استفاده کنید.)
-
-📈 آمار اعضا (هر نفر ۰ تا ۱۰۰):
-• /stats — آمار خودتان (یا ریپلای + /stats)
-• /stats @ali — آمار یک نفر (همه می‌توانند ببینند)
-• /mystats — آمار خودتان
-• /allstats — آمار کلی همه (ادمین‌ها)
-• /ability متن — تعریف یا تغییر توانایی شخصی خودتان
-
-🏆 رتبه‌بندی:
-• /ranking — جدول امتیازها از بهترین به بدترین
-• /ranking stats — رتبه‌بندی بر اساس آمار (میانگین 💡+😂+🥰+🐢)
-• /statsranking — میان‌بر همان رتبه‌بندی آمار
-
-📊 مشاهده‌ی گزارش‌ها:
-• /points — گزارش کامل یک کاربر (با ریپلای یا آیدی/یوزرنیم)
-• /mypoints — امتیاز خودتان
-• /report — گزارش همه‌ی اعضا با امتیاز نهایی
-• /history — تاریخچه‌ی آخرین رویدادهای یک کاربر
-
-📢 خبر روز (فقط ادمین‌ها، داخل گروه):
-• /news متن خبر — ثبت خبر روز؛ خود حذف می‌شود پس از ۲۴ ساعت
-• /news بدون متن — نمایش خبر فعلی (اگر وجود دارد)
-
-🔑 دستورات عمومی:
-• /start — شروع
-• /menu — پنل دکمه‌ای
-• /id — نمایش آیدی عددی خودتان
-• /cancel — لغو فرم جاری
-
-🧮 نحوه‌ی محاسبه:
-اخطار = ۱- | استرایک = ۳- | امتیاز مثبت = ۱+
-پاک‌سازی: اول هر ۵ پلاس = ۱ استرایک، سپس هر ۳ پلاس باقی‌مانده = ۱ اخطار
-امتیاز نهایی = مثبت − منفی باقی‌مانده
-
-نکته: برای اینکه ربات کلمه‌های دستورات را ببیند، در BotFather حالت Privacy Mode را خاموش کنید (/setprivacy → Disable) یا ربات را ادمین کانال/گروه کنید.
-
-━━━━━━━━━━━━━━
-طراحی شده توسط کوروش ❤️"""
-
-
-def render_help() -> str:
-    words = db.get_words()
-    return HELP_TEXT.format(warn=words["warn"], strike=words["strike"], plus=words["plus"])
-
-
-# ---------------------------------------------------------------- /start، /help، /menu
+# ---------------------------------------------------------------- /start، /id، /menu
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -331,7 +262,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "به اعضای برادری BBH خوش آمدید 👋\n\n"
         "من ربات مدیریت امتیاز این کانال هستم؛ اخطار، استرایک و امتیاز مثبت اعضا را ثبت و محاسبه می‌کنم.\n\n"
         f"🆔 آیدی عددی شما: {ftext.fa_digits(user.id) if user else '—'}\n\n"
-        "برای دیدن همه‌ی دستورها /help را بفرستید.\n\n"
+        "برای دیدن پنل مدیریت، /menu را بفرستید.\n\n"
         "━━━━━━━━━━━━━━\n"
         "طراحی شده توسط کوروش ❤️"
     )
@@ -340,10 +271,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(text, reply_markup=main_menu_keyboard(master))
     else:
         await update.effective_message.reply_text(text)
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(render_help())
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,9 +288,7 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """همه‌ی کاربران — دکمه‌ی باز کردن پنل برادری BBH را نشان می‌دهد."""
     from telegram import WebAppInfo
-
     startapp = "https://t.me/azizmstrikebot?startapp"
     pages_url = "https://kouroshsamadof.github.io/bbh-mini-app/"
     chat = update.effective_chat
@@ -530,7 +455,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------- 📈 آمار اعضا (0 تا 100)
 
 STAT_META = {
-    "retardness": {"en": "RETARDNESS", "emoji": "🐢", "fa": "عقب‌Mondگی"},
+    "retardness": {"en": "RETARDNESS", "emoji": "🐢", "fa": "عقب‌mondگی"},
     "iq":         {"en": "IQ",          "emoji": "💡", "fa": "هوش"},
     "simp":       {"en": "SIMPNESS",    "emoji": "🥰", "fa": "سیمپ بودن"},
     "comedy":     {"en": "COMEDY",      "emoji": "😂", "fa": "کمدین بودن"},
@@ -542,7 +467,7 @@ STAT_ALIASES = {
     "simp": "simp", "simpness": "simp", "simping": "simp", "سیمپ": "simp",
     "comedy": "comedy", "comedian": "comedy", "کمدین": "comedy",
 }
-STAT_INCREMENT = 5   # هر رأی موفق = ۵٪
+STAT_INCREMENT = 5
 
 
 def norm_stat(raw: str) -> str | None:
@@ -597,7 +522,6 @@ async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, tokens:
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/stats — آمار خودتان، یا با @یوزرنیم/آیدی/ریپلای: آمار آن کاربر"""
     await send_stats(update, context, list(context.args or []))
 
 
@@ -731,7 +655,6 @@ async def stat_proposal_close_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/stat iq @user [give|take] — باز کردن رأی‌گیری پیشنهاد آمار (فقط ادمین‌ها)"""
     msg = update.effective_message
     chat = update.effective_chat
     if not await is_admin(update, context):
@@ -763,19 +686,16 @@ async def cmd_stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if error:
         await msg.reply_text(error)
         return
-
     existing = db.open_proposal_for(chat.id, target.user_id, stat)
     if existing:
         await msg.reply_text("❗️ قبلاً یک پیشنهاد آمار باز برای این عضو و این آمار وجود دارد.")
         return
-
     user = update.effective_user
     if posted_as_chat(update):
         proposer_id, proposer_name = None, (chat.title if chat else "کانال")
     else:
         proposer_id = user.id if user else None
         proposer_name = display_name(user) if user else "ادمین"
-
     db.ensure_stub(target.user_id, target.name, target.username)
     closes = datetime.now() + timedelta(minutes=STAT_VOTE_MINUTES)
     pid = db.create_stat_proposal(
@@ -807,7 +727,6 @@ async def stat_vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer("این رأی‌گیری پیدا نشد!", show_alert=True)
         return
     user = update.effective_user
-
     if action == "close":
         if not await is_admin(update, context):
             await query.answer("⛔️ فقط ادمین‌ها می‌توانند نتیجه را اعلام کنند.", show_alert=True)
@@ -815,7 +734,6 @@ async def stat_vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer()
         await finalize_stat_proposal(context, pid)
         return
-
     if p["status"] == "closed":
         await query.answer("این رأی‌گیری بسته شده است.", show_alert=True)
         return
@@ -825,10 +743,8 @@ async def stat_vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if user.id == p["target_id"]:
         await query.answer("شما نمی‌توانید برای آمار خودتان رأی دهید.", show_alert=True)
         return
-
     db.upsert_stat_vote(pid, user.id, action)
     await query.answer("✅ رأی شما ثبت شد.")
-
     approve, reject = db.stat_vote_counts(pid)
     p = db.get_proposal(pid)
     try:
@@ -848,14 +764,12 @@ async def finalize_stat_proposal(context: ContextTypes.DEFAULT_TYPE, pid: int):
         return
     closes_at = datetime.fromisoformat(p["closes_at"])
     if closes_at > datetime.now() + timedelta(seconds=2):
-        return  # جاب زودتر از موعد اجرا شده — هنوز باز است
-
+        return
     approve, reject = db.stat_vote_counts(pid)
-    applied = approve > reject   # فقط اکثریت بیشتر → اعمال می‌شود
+    applied = approve > reject
     delta = STAT_INCREMENT if p["action"] == "give" else -STAT_INCREMENT
     result = "applied" if applied else "rejected"
     db.close_proposal(pid, result, approve, reject)
-
     m = STAT_META[p["stat"]]
     votes_line = f"✅ {ftext.fa_digits(approve)} — ❌ {ftext.fa_digits(reject)}"
     if applied:
@@ -871,7 +785,6 @@ async def finalize_stat_proposal(context: ContextTypes.DEFAULT_TYPE, pid: int):
             f"❌ آمار «{m['en']}» برای «{p['target_name']}» تغییر نکرد (اکثریت به تایید نرسید).",
             votes_line,
         ]
-
     result_text = "\n".join(lines)
     delivered = False
     if p["message_id"]:
@@ -923,14 +836,12 @@ async def ability_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg = update.effective_message
         args = list(context.args or [])
-
     if args:
         cleaned = clean_ability(" ".join(args))
         if not cleaned:
             await msg.reply_text("❌ توانایی باید بین ۲ تا ۴۸ نویسه و یک خط باشد.\nمثال: /ability سریع مثل صاعقه")
             return ConversationHandler.END
         return await _save_ability(update, context, cleaned)
-
     current = db.get_ability(user.id) if user else None
     current_line = f"\n(فعلی: «{current}»)" if current else ""
     await msg.reply_text(
@@ -955,21 +866,17 @@ MAX_NEWS_LEN = 500
 
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/news <متن> — ثبت خبر روز (فقط ادمین‌ها، داخل گروه). خود حذف می‌شود پس از ۲۴ ساعت."""
     msg = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-
     if not await is_admin(update, context):
         await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند خبر ثبت کنند.")
         return
     if chat is None or chat.type == "private":
         await msg.reply_text("📢 خبر روز فقط داخل گروه قابل ثبت است.")
         return
-
     args = list(context.args or [])
     if not args:
-        # نمایش خبر فعلی
         current = db.get_active_news(chat.id)
         if current:
             try:
@@ -977,16 +884,11 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 expires = current["expires_at"]
             await msg.reply_text(
-                f"📢 خبر فعلی:\n\n{current['content']}\n\n"
-                f"⏳ تا: {expires}"
+                f"📢 خبر فعلی:\n\n{current['content']}\n\n⏳ تا: {expires}"
             )
         else:
-            await msg.reply_text(
-                "❓ خبر فعالی ثبت نشده است.\n"
-                "اشاره: /news متن خبر روز"
-            )
+            await msg.reply_text("❓ خبر فعالی ثبت نشده است.\nاشاره: /news متن خبر روز")
         return
-
     content = " ".join(args).strip()
     if len(content) < 2:
         await msg.reply_text("❌ متن خبر خیلی کوتاه است.")
@@ -994,29 +896,20 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(content) > MAX_NEWS_LEN:
         await msg.reply_text(f"❌ متن خبر خیلی بلند است (حداکثر {MAX_NEWS_LEN} نویسه).")
         return
-
-    # حذف خبر قبلی (اگر وجود دارد) تا فقط آخرین خبر فعال بماند
     db.deactivate_previous_news(chat.id)
-
     expires = datetime.now() + timedelta(hours=NEWS_HOURS)
     admin_id = user.id if user else None
     admin_name = display_name(user) if user else "ادمین"
-
     sent = await msg.reply_text(
         f"📢 خبر روز:\n\n{content}\n\n"
         f"👮 توسط: {admin_name}\n"
         f"⏳ خود حذف می‌شود پس از ۲۴ ساعت"
     )
-
     news_id = db.create_news(
-        chat_id=chat.id,
-        content=content,
-        admin_id=admin_id,
-        admin_name=admin_name,
-        message_id=sent.message_id,
+        chat_id=chat.id, content=content, admin_id=admin_id,
+        admin_name=admin_name, message_id=sent.message_id,
         expires_at=expires.isoformat(timespec="seconds"),
     )
-
     schedule_news_delete(context.application, news_id, expires)
     logger.info("خبر #%s ثبت شد در چت %s، تا %s", news_id, chat.id, expires.isoformat())
 
@@ -1024,8 +917,7 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def schedule_news_delete(app, news_id: int, when: datetime) -> None:
     try:
         app.job_queue.run_once(
-            news_delete_job, when=when, data=news_id,
-            name=f"news_{news_id}",
+            news_delete_job, when=when, data=news_id, name=f"news_{news_id}",
         )
     except Exception as exc:
         logger.warning("برنامه‌ریزی حذف خبر ناموفق: %s", exc)
@@ -1045,7 +937,6 @@ async def delete_expired_news_by_id(context: ContextTypes.DEFAULT_TYPE, news_id:
         expires_at = None
     if expires_at is not None and expires_at > datetime.now() + timedelta(seconds=2):
         return
-
     if n["message_id"]:
         try:
             await context.application.bot.delete_message(
@@ -1053,28 +944,59 @@ async def delete_expired_news_by_id(context: ContextTypes.DEFAULT_TYPE, news_id:
             )
         except Exception as exc:
             logger.warning("حذف پیام خبر #%s ناموفق: %s", news_id, exc)
-
     db.delete_news(news_id)
     logger.info("خبر #%s در چت %s حذف شد (انقضا)", news_id, n["chat_id"])
 
 
-# ---------------------------------------------------------------- ثبت اخطار / استرایک / امتیاز
+# ---------------------------------------------------------------- ثبت اخطار / استرایک / امتیاز / حذف استرایک
+
+_MUTE_PERMISSIONS = ChatPermissions(
+    can_send_messages=False, can_send_audios=False, can_send_documents=False,
+    can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
+    can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False,
+    can_add_web_page_previews=False, can_invite_users=False,
+)
+
 
 def record_point(target, admin_id, admin_name, kind: str, reason: str | None, chat_id: int | None):
-    """ثبت رویداد امتیاز و برگرداندن خلاصه‌ی امتیازها."""
     db.ensure_stub(target.user_id, target.name, target.username)
     db.add_point(
-        target_id=target.user_id,
-        target_name=target.name,
-        chat_id=chat_id,
-        admin_id=admin_id,
-        admin_name=admin_name,
-        kind=kind,
-        reason=reason,
+        target_id=target.user_id, target_name=target.name, chat_id=chat_id,
+        admin_id=admin_id, admin_name=admin_name, kind=kind, reason=reason,
     )
     if target.username or target.name:
         db.upsert_member(target.user_id, target.username, target.name, None)
     return db.summary_for(target.user_id)
+
+
+async def maybe_punish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, target, stats: dict) -> list[str]:
+    cur = stats["strikes_remaining"]
+    if cur < STRIKE_MUTE_LIMIT:
+        return []
+    try:
+        tmember = await context.bot.get_chat_member(chat_id, target.user_id)
+        st = getattr(tmember.status, "value", str(tmember.status)).lower()
+        if st in ("creator", "owner", "administrator"):
+            return [f"ℹ️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید، اما چون ادمین است مجازات نشد."]
+    except Exception as exc:
+        logger.warning("get_chat_member(target) failed: %s", exc)
+        return [f"⚠️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید، اما وضعیت ادمینی او مشخص نشد؛ مجازات اعمال نشد."]
+    if cur >= STRIKE_BAN_LIMIT:
+        try:
+            await context.bot.ban_chat_member(chat_id, target.user_id)
+            return [f"🔨 «{target.name}» به دلیل رسیدن به {ftext.fa_digits(cur)} استرایک، از گروه اخراج شد."]
+        except Exception as exc:
+            logger.warning("ban failed: %s", exc)
+            return [f"⚠️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید — اخراج خودکار انجام نشد."]
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id, target.user_id, permissions=_MUTE_PERMISSIONS,
+            until_date=datetime.now() + timedelta(days=1),
+        )
+        return [f"🔇 «{target.name}» به دلیل رسیدن به {ftext.fa_digits(cur)} استرایک، ۱ روز میوت شد."]
+    except Exception as exc:
+        logger.warning("mute failed: %s", exc)
+        return [f"⚠️ «{target.name}» به {ftext.fa_digits(cur)} استرایک رسید — میوت خودکار انجام نشد."]
 
 
 async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str):
@@ -1084,14 +1006,12 @@ async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: st
     if not await is_admin(update, context):
         await msg.reply_text("⛔️ فقط ادمین‌های کانال یا ادمین‌های اصلی می‌توانند این دستور را اجرا کنند.")
         return
-
     target, error = resolve_target(msg, context.args or [])
     if error:
         words = db.get_words()
         example_word = words[kind]
         await msg.reply_text(f"{error}\n\nمثال: {example_word} @یوزرنیم دلیل")
         return
-
     reason = " ".join(target.rest).strip() or None
     user = update.effective_user
     if posted_as_chat(update):
@@ -1101,13 +1021,37 @@ async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: st
         admin_id = user.id if user else None
         admin_name = display_name(user) if user else "ادمین"
 
+    # استرایک → باز کردن رأی‌گیری (نه ثبت فوری)
+    if kind == "strike":
+        existing = db.open_strike_vote_for(chat_id=update.effective_chat.id if update.effective_chat else 0,
+                                          target_id=target.user_id)
+        if existing:
+            await msg.reply_text(
+                f"❗️ قبلاً یک رأی‌گیری استرایک باز برای «{target.name}» وجود دارد.\n"
+                "تا اعلام نتیجه‌ی آن صبر کنید."
+            )
+            return
+        closes = datetime.now() + timedelta(minutes=STRIKE_VOTE_MINUTES)
+        vid = db.create_strike_vote(
+            chat_id=update.effective_chat.id if update.effective_chat else 0,
+            target_id=target.user_id, target_name=target.name,
+            proposer_id=admin_id, proposer_name=admin_name, reason=reason,
+            closes_at=closes.isoformat(timespec="seconds"),
+        )
+        v = db.get_strike_vote(vid)
+        sent = await msg.reply_text(
+            strike_vote_view(v, 0, 0, 0), reply_markup=strike_vote_keyboard(vid)
+        )
+        db.set_strike_vote_message(vid, sent.message_id)
+        schedule_strike_vote_close(context.application, vid, closes)
+        logger.info("رای‌گیری استرایک #%s برای کاربر %s در چت %s باز شد", vid, target.user_id, chat_id if update.effective_chat else 0)
+        return
+
     stats = record_point(target, admin_id, admin_name, kind, reason,
                          update.effective_chat.id if update.effective_chat else None)
     meta = KIND_META[kind]
     sign = "+" if scoring.POINTS[kind] > 0 else ""
-    lines = [
-        f"✅ {meta['label']} برای «{target.name}» ثبت شد ({sign}{ftext.fa_digits(scoring.POINTS[kind])}).",
-    ]
+    lines = [f"✅ {meta['label']} برای «{target.name}» ثبت شد ({sign}{ftext.fa_digits(scoring.POINTS[kind])})."]
     if reason:
         lines.append(f"💬 دلیل: {reason}")
     lines.append("")
@@ -1123,12 +1067,41 @@ async def cmd_strike(update, context):
     await do_action(update, context, "strike")
 
 
+async def cmd_unstrike(update, context):
+    """حذف مستقیم یک استرایک از کاربر (فقط ادمین اصلی)"""
+    msg = update.effective_message
+    if not await is_master(update, context):
+        await msg.reply_text("⛔️ فقط ادمین اصلی می‌تواند استرایک حذف کند.")
+        return
+    target, error = resolve_target(msg, context.args or [])
+    if error:
+        await msg.reply_text(error)
+        return
+    reason = " ".join(target.rest).strip() or None
+    user = update.effective_user
+    admin_id = user.id if user else None
+    admin_name = display_name(user) if user else "ادمین"
+    result = db.remove_strike(target.user_id, reason=reason, admin_id=admin_id,
+                              admin_name=admin_name,
+                              chat_id=update.effective_chat.id if update.effective_chat else None)
+    if not result:
+        await msg.reply_text("❌ این کاربر در دیتابیس نیست.")
+        return
+    lines = [
+        f"🟢 یک استرایک برای «{target.name}» حذف شد."
+    ]
+    if reason:
+        lines.append(f"💬 دلیل: {reason}")
+    lines.append("")
+    lines.append(compact_stats_line(result))
+    await msg.reply_text("\n".join(lines))
+
+
 async def cmd_plus(update, context):
     await do_action(update, context, "plus")
 
 
 async def word_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """روتر کلمه‌های قابل‌تغییر دستورات (مثلاً «اخطار» به‌جای /warn)."""
     user = update.effective_user
     if user and user.is_bot:
         return
@@ -1163,6 +1136,160 @@ async def cmd_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(format_member_card(target.user_id, member))
 
 
+# ---------------------------------------------------------------- رأی‌گیری استرایک (strike voting)
+
+def strike_vote_keyboard(strike_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔴 استرایک بزنید", callback_data=f"jvote:strike:{strike_id}"),
+            InlineKeyboardButton("🟢 پاک کردن", callback_data=f"jvote:clear:{strike_id}"),
+        ],
+        [InlineKeyboardButton("🏁 اعلام نتیجه (ادمین‌ها)", callback_data=f"jvote:close:{strike_id}")],
+    ])
+
+
+def strike_vote_view(j, strikes: int, clears: int, voters: int) -> str:
+    try:
+        ends = ftext.fa_datetime(datetime.fromisoformat(j["closes_at"]))
+        timing = f"⏳ پایان رأی‌گیری: {ends}"
+    except ValueError:
+        timing = "⏳ پایان رأی‌گیری: به‌زودی"
+    lines = [
+        f"⚖️ رأی‌گیری استرایک برای «{j['target_name']}»",
+        f"👮 پیشنهاددهنده: {j['proposer_name'] or 'ادمین'}",
+    ]
+    if j["reason"]:
+        lines.append(f"💬 دلیل: {j['reason']}")
+    lines.append("")
+    lines.append(
+        f"🔴 استرایک: {ftext.fa_digits(strikes)} رأی    "
+        f"🟢 پاک کردن: {ftext.fa_digits(clears)} رأی"
+    )
+    lines.append(f"👥 رأی‌دهندگان: {ftext.fa_digits(voters)} نفر")
+    lines.append("")
+    lines.append(f"🟦 رأی‌گیری باز است ({ftext.fa_digits(STRIKE_VOTE_MINUTES)} دقیقه)")
+    lines.append(timing)
+    lines.append("(خودِ فرد نمی‌تواند رأی دهد؛ رأی تا بسته شدن قابل تغییر است.)")
+    return "\n".join(lines)
+
+
+def schedule_strike_vote_close(app, strike_id: int, when: datetime):
+    try:
+        app.job_queue.run_once(
+            strike_vote_close_job, when=when, data=strike_id,
+            name=f"strike_{strike_id}",
+        )
+    except Exception as exc:
+        logger.warning("برنامه‌ریزی بستن رأی‌گیری استرایک ناموفق: %s", exc)
+
+
+async def strike_vote_close_job(context: ContextTypes.DEFAULT_TYPE):
+    await finalize_strike_vote(context, context.job.data)
+
+
+async def strike_vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data or ""
+    m = re.fullmatch(r"jvote:(strike|clear|close):(\d+)", data)
+    if not m:
+        return
+    action, vid = m.group(1), int(m.group(2))
+    j = db.get_strike_vote(vid)
+    if not j:
+        await query.answer("این رأی‌گیری پیدا نشد!", show_alert=True)
+        return
+    user = update.effective_user
+    if action == "close":
+        if not await is_admin(update, context):
+            await query.answer("⛔️ فقط ادمین‌ها می‌توانند نتیجه را اعلام کنند.", show_alert=True)
+            return
+        await query.answer()
+        await finalize_strike_vote(context, vid)
+        return
+    if j["status"] == "closed":
+        await query.answer("این رأی‌گیری بسته شده است.", show_alert=True)
+        return
+    if user is None or user.is_bot:
+        await query.answer("ربات‌ها رأی نمی‌دهند.", show_alert=True)
+        return
+    if user.id == j["target_id"]:
+        await query.answer("شما نمی‌توانید به رأی‌گیری خودتان رأی دهید.", show_alert=True)
+        return
+    db.upsert_strike_vote(vid, user.id, display_name(user), action)
+    await query.answer("✅ رأی شما ثبت شد.")
+    strikes, clears, voters = db.strike_vote_counts(vid)
+    j = db.get_strike_vote(vid)
+    try:
+        await query.edit_message_text(
+            strike_vote_view(j, strikes, clears, voters), reply_markup=strike_vote_keyboard(vid),
+        )
+    except BadRequest:
+        pass
+    except Exception as exc:
+        logger.warning("به‌روزرسانی پیام رأی‌گیری استرایک ناموفق: %s", exc)
+
+
+async def finalize_strike_vote(context: ContextTypes.DEFAULT_TYPE, vid: int):
+    j = db.get_strike_vote(vid)
+    if not j or j["status"] == "closed":
+        return
+    closes_at = datetime.fromisoformat(j["closes_at"])
+    if closes_at > datetime.now() + timedelta(seconds=2):
+        return
+    strikes, clears, voters = db.strike_vote_counts(vid)
+    if strikes > clears:
+        winner = "strike"
+    elif clears > strikes:
+        winner = "clear"
+    else:
+        winner = "strike"  # مساوی → استرایک ثبت می‌شود
+
+    db.close_strike_vote(vid, winner)
+    votes_line = f"🔴 {ftext.fa_digits(strikes)} — 🟢 {ftext.fa_digits(clears)}   (👥 {ftext.fa_digits(voters)} رأی‌دهنده)"
+
+    target = Target(j["target_id"], j["target_name"], None, [])
+    admin_name = j["proposer_name"] or "رای‌گیری"
+
+    if winner == "clear":
+        result_lines = [
+            f"🟢 رأی‌گیری استرایک بسته شد: «{j['target_name']}» پاک شد (استرایک حذف شد).",
+            votes_line,
+        ]
+        # حذف یک استرایک از کاربر
+        result = db.remove_strike(target.user_id, reason="رای‌گیری پاک کردن استرایک",
+                                  admin_id=j["proposer_id"], admin_name=admin_name,
+                                  chat_id=j["chat_id"])
+        if result:
+            result_lines.append("")
+            result_lines.append(compact_stats_line(result))
+    else:
+        result_lines = [
+            f"🔴 رأی‌گیری استرایک بسته شد: استرایک برای «{j['target_name']}» ثبت شد.",
+            votes_line,
+        ]
+        stats = record_point(target, j["proposer_id"], admin_name, "strike",
+                             j["reason"], j["chat_id"])
+        result_lines.append("")
+        result_lines.append(compact_stats_line(stats))
+        result_lines.extend(await maybe_punish(context, j["chat_id"], target, stats))
+
+    result_text = "\n".join(result_lines)
+    delivered = False
+    if j["message_id"]:
+        try:
+            await context.application.bot.edit_message_text(
+                chat_id=j["chat_id"], message_id=j["message_id"], text=result_text,
+            )
+            delivered = True
+        except Exception as exc:
+            logger.warning("ویرایش پیام نتیجه استرایک ناموفق: %s", exc)
+    if not delivered:
+        try:
+            await context.application.bot.send_message(chat_id=j["chat_id"], text=result_text)
+        except Exception as exc:
+            logger.warning("ارسال پیام نتیجه استرایک ناموفق: %s", exc)
+
+
 # ---------------------------------------------------------------- منوی دکمه‌ای
 
 def back_keyboard() -> InlineKeyboardMarkup:
@@ -1187,9 +1314,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu:back":
         await query.edit_message_text("🎛 پنل مدیریت:", reply_markup=main_menu_keyboard(master))
         return
-    if data == "menu:help":
-        await query.edit_message_text(render_help(), reply_markup=back_keyboard())
-        return
     if data == "menu:all":
         await query.edit_message_text(build_all_report(), reply_markup=back_keyboard())
         return
@@ -1197,7 +1321,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not master:
             await query.edit_message_text("⛔️ خبر روز فقط برای ادمین اصلی است.", reply_markup=back_keyboard())
             return
-        # نمایش خبر فعال در چت فعلی
         chat = update.effective_chat
         current = db.get_active_news(chat.id) if chat else None
         if current:
@@ -1238,7 +1361,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------- شروع برنامه
 
 async def on_start(app):
-    """پیشنهادهای آمار نیمه‌کاره بعد از ری‌استارت بازیابی می‌شوند."""
+    """رای‌گیری‌های ناقصه بعد از ری‌استارت بازیابی می‌شوند."""
     proposals = db.open_proposals()
     for p in proposals:
         closes = datetime.fromisoformat(p["closes_at"])
@@ -1246,6 +1369,15 @@ async def on_start(app):
         schedule_proposal_close(app, p["id"], when)
     if proposals:
         logger.info("%d پیشنهاد آمار نیمه‌کاره بازیابی شد", len(proposals))
+
+    # ripristino strike votes باز
+    strikes = db.open_strike_votes()
+    for s in strikes:
+        closes = datetime.fromisoformat(s["closes_at"])
+        when = max(closes, datetime.now() + timedelta(seconds=2))
+        schedule_strike_vote_close(app, s["id"], when)
+    if strikes:
+        logger.info("%d رأی‌گیری استرایک نیمه‌کاره بازیابی شد", len(strikes))
 
     # خبرهای منقضی‌شده را بعد از ری‌استارت پاک می‌کنیم
     expired = db.list_expired_news()
@@ -1286,15 +1418,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main() -> None:
     import asyncio
-
     asyncio.set_event_loop(asyncio.new_event_loop())
-
     request = HTTPXRequest(
-        connection_pool_size=16,
-        connect_timeout=20.0,
-        read_timeout=20.0,
-        write_timeout=20.0,
-        pool_timeout=10.0,
+        connection_pool_size=16, connect_timeout=20.0, read_timeout=20.0,
+        write_timeout=20.0, pool_timeout=10.0,
     )
     app = (
         ApplicationBuilder()
@@ -1318,12 +1445,12 @@ def main() -> None:
     app.add_handler(ability_conversation)
 
     simple_commands = [
-        ("start", cmd_start), ("help", cmd_help), ("id", cmd_id), ("panel", cmd_panel), ("menu", cmd_menu),
+        ("start", cmd_start), ("id", cmd_id), ("panel", cmd_panel), ("menu", cmd_menu),
         ("mypoints", cmd_mypoints), ("points", cmd_points), ("report", cmd_report),
         ("history", cmd_history), ("member", cmd_member),
         ("stats", cmd_stats), ("mystats", cmd_mystats), ("stat", cmd_stat), ("allstats", cmd_allstats),
         ("ranking", cmd_ranking), ("statsranking", cmd_statsranking),
-        ("warn", cmd_warn), ("strike", cmd_strike), ("plus", cmd_plus),
+        ("warn", cmd_warn), ("strike", cmd_strike), ("unstrike", cmd_unstrike), ("plus", cmd_plus),
         ("news", cmd_news),
     ]
     for name, handler in simple_commands:
@@ -1331,7 +1458,8 @@ def main() -> None:
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, word_router), group=1)
     app.add_handler(CallbackQueryHandler(stat_vote_callback, pattern=r"^svote:(approve|reject|close):\d+$"))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:(close|back|help|all|news|ranking(:points|:stats)?|stats(:all:\d+)?)$"))
+    app.add_handler(CallbackQueryHandler(strike_vote_callback, pattern=r"^jvote:(strike|clear|close):\d+$"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:(close|back|all|news|ranking(:points|:stats)?|stats(:all:\d+)?)$"))
     app.add_handler(CallbackQueryHandler(ability_entry, pattern="^ability:prompt$"))
 
     app.add_error_handler(error_handler)

@@ -197,6 +197,41 @@ def get_active_news(chat_id: int | None = None):
     return dict(row) if row else None
 
 
+def get_strike_votes(chat_id: int | None = None):
+    """لیست رأی‌گیری‌های استرایک فعال را برمی‌گرداند."""
+    if chat_id is not None:
+        rows = _get_conn().execute(
+            """
+            SELECT * FROM strike_votes
+            WHERE chat_id = ? AND status = 'open'
+            ORDER BY id DESC
+            """,
+            (chat_id,),
+        ).fetchall()
+    else:
+        rows = _get_conn().execute(
+            """
+            SELECT * FROM strike_votes
+            WHERE status = 'open'
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        # شمارش رأی‌ها
+        vote_rows = _get_conn().execute(
+            "SELECT vote, COUNT(*) AS c FROM strike_vote_votes WHERE strike_id = ? GROUP BY vote",
+            (d["id"],),
+        ).fetchall()
+        counts = {vr["vote"]: vr["c"] for vr in vote_rows}
+        d["strikes"] = counts.get("strike", 0)
+        d["clears"] = counts.get("clear", 0)
+        d["voters"] = sum(counts.values())
+        result.append(d)
+    return result
+
+
 def judgments_history(limit: int = 30) -> list[dict]:
     rows = _get_conn().execute(
         """
@@ -306,6 +341,16 @@ class Handler(BaseHTTPRequestHandler):
             chat_id = int(qs["chat_id"]) if qs.get("chat_id") else None
             news = get_active_news(chat_id)
             self._send_json(200, {"news": news})
+            return
+        if path == "/api/strike-votes":
+            user = _require_user(self.headers.get("X-Init-Data"))
+            if not user:
+                self._send_json(401, {"error": "not authorized"})
+                return
+            qs = dict(parse_qsl(parsed_path[1])) if len(parsed_path) > 1 else {}
+            chat_id = int(qs["chat_id"]) if qs.get("chat_id") else None
+            votes = get_strike_votes(chat_id)
+            self._send_json(200, {"votes": votes})
             return
         self._send_json(404, {"error": "not found"})
 
