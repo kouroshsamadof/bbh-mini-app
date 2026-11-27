@@ -236,6 +236,32 @@ def get_strike_votes(chat_id: int | None = None):
     return result
 
 
+def get_stat_rating_averages():
+    rows = _get_conn().execute(
+        "SELECT target_id, stat, AVG(value) AS avg_val, COUNT(*) AS cnt FROM stat_ratings GROUP BY target_id, stat"
+    ).fetchall()
+    out = {}
+    for r in rows:
+        tid = r["target_id"]
+        if tid not in out:
+            out[tid] = {}
+        out[tid][r["stat"]] = {"avg": round(r["avg_val"], 1), "count": r["cnt"]}
+    return out
+
+def get_my_stat_ratings(user_id: int):
+    rows = _get_conn().execute(
+        "SELECT target_id, stat, value FROM stat_ratings WHERE rater_id = ?",
+        (user_id,),
+    ).fetchall()
+    out = {}
+    for r in rows:
+        tid = r["target_id"]
+        if tid not in out:
+            out[tid] = {}
+        out[tid][r["stat"]] = r["value"]
+    return out
+
+
 def ensure_stub(cur_user: dict, name: str | None = None, age: int | None = None):
     uid = cur_user["id"]
     raw = name or f"{cur_user['first_name']} {cur_user['last_name']}".strip()
@@ -335,6 +361,15 @@ class Handler(BaseHTTPRequestHandler):
             chat_id = int(qs["chat_id"]) if qs.get("chat_id") else None
             votes = get_strike_votes(chat_id)
             self._send_json(200, {"votes": votes})
+            return
+        if path == "/api/stat-ratings":
+            user = _require_user(self.headers.get("X-Init-Data"))
+            if not user:
+                self._send_json(401, {"error": "not authorized"})
+                return
+            avgs = get_stat_rating_averages()
+            my_ratings = get_my_stat_ratings(user["id"])
+            self._send_json(200, {"averages": avgs, "myRatings": my_ratings})
             return
         self._send_json(404, {"error": "not found"})
 
@@ -531,6 +566,34 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 news_id = cur.lastrowid
             self._send_json(200, {"ok": True, "id": news_id})
+            return
+
+        if parsed_path == "/api/rate-stat":
+            target_id = data.get("target_id")
+            stat = data.get("stat")
+            value = data.get("value")
+            if not target_id or stat not in ("retardness", "iq", "simp", "comedy"):
+                self._send_json(400, {"error": "invalid target or stat"})
+                return
+            if value is None or not isinstance(value, int) or value < 0 or value > 100:
+                self._send_json(400, {"error": "value must be 0-100"})
+                return
+            if target_id == user["id"]:
+                self._send_json(400, {"error": "cannot rate yourself"})
+                return
+            ensure_stub(user)
+            with _lock, _get_conn():
+                _get_conn().execute(
+                    """
+                    INSERT INTO stat_ratings(rater_id, target_id, stat, value, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(rater_id, target_id, stat) DO UPDATE SET
+                        value = excluded.value,
+                        created_at = excluded.created_at
+                    """,
+                    (user["id"], target_id, stat, value, _now()),
+                )
+            self._send_json(200, {"ok": True})
             return
 
         self._send_json(404, {"error": "not found"})
