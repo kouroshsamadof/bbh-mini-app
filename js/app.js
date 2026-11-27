@@ -228,7 +228,6 @@ async function submitStatRating(targetId, stat, value) {
     showToast('✅ امتیاز ثبت شد.');
     haptic('light');
     await fetchStatRatings();
-    renderRate();
     return true;
   } else {
     showToast('❌ ثبت ناموفق — ' + (res?.error || 'دوباره تلاش کن.'));
@@ -716,7 +715,6 @@ function renderAll() {
   renderRankings();
   renderNews();
   renderStrikeVotes();
-  renderRate();
   populateStrikeTargetSelect();
 }
 
