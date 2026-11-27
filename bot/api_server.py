@@ -190,6 +190,7 @@ def build_state():
     pf = points_map()
     sm = stats_map()
     ab = abilities_map()
+    ra = stat_rating_averages_map()
     out_members = []
     for m in members:
         pid = m["user_id"]
@@ -248,6 +249,32 @@ def get_strike_votes(chat_id: int | None = None):
         d["voters"] = sum(counts.values())
         result.append(d)
     return result
+
+
+def get_stat_rating_averages():
+    rows = _get_conn().execute(
+        "SELECT target_id, stat, AVG(value) AS avg_val, COUNT(*) AS cnt FROM stat_ratings GROUP BY target_id, stat"
+    ).fetchall()
+    out = {}
+    for r in rows:
+        tid = r["target_id"]
+        if tid not in out:
+            out[tid] = {}
+        out[tid][r["stat"]] = {"avg": round(r["avg_val"], 1), "count": r["cnt"]}
+    return out
+
+def get_my_stat_ratings(user_id: int):
+    rows = _get_conn().execute(
+        "SELECT target_id, stat, value FROM stat_ratings WHERE rater_id = ?",
+        (user_id,),
+    ).fetchall()
+    out = {}
+    for r in rows:
+        tid = r["target_id"]
+        if tid not in out:
+            out[tid] = {}
+        out[tid][r["stat"]] = r["value"]
+    return out
 
 
 def ensure_stub(cur_user: dict, name: str | None = None, age: int | None = None):
@@ -349,6 +376,15 @@ class Handler(BaseHTTPRequestHandler):
             chat_id = int(qs["chat_id"]) if qs.get("chat_id") else None
             votes = get_strike_votes(chat_id)
             self._send_json(200, {"votes": votes})
+            return
+        if path == "/api/stat-ratings":
+            user = _require_user(self.headers.get("X-Init-Data"))
+            if not user:
+                self._send_json(401, {"error": "not authorized"})
+                return
+            avgs = get_stat_rating_averages()
+            my_ratings = get_my_stat_ratings(user["id"])
+            self._send_json(200, {"averages": avgs, "myRatings": my_ratings})
             return
         self._send_json(404, {"error": "not found"})
 
@@ -547,49 +583,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "id": news_id})
             return
 
-        if parsed_path == "/api/delmember":
-            if not _is_master(user["id"], user.get("username")):
-                self._send_json(403, {"error": "only master admin"})
-                return
-            target_id = data.get("target_id")
-            if not target_id:
-                self._send_json(400, {"error": "target_id required"})
-                return
-            with _lock, _get_conn():
-                _get_conn().execute("DELETE FROM members WHERE user_id = ?", (target_id,))
-                _get_conn().execute("DELETE FROM points WHERE target_id = ?", (target_id,))
-                _get_conn().execute("DELETE FROM member_stats WHERE user_id = ?", (target_id,))
-                _get_conn().execute("DELETE FROM personal_abilities WHERE user_id = ?", (target_id,))
-            self._send_json(200, {"ok": True})
-            return
-
-        if parsed_path == "/api/stat-ratings":
-            user = _require_user(self.headers.get("X-Init-Data"))
-            if not user:
-                self._send_json(401, {"error": "not authorized"})
-                return
-            avgs = _get_conn().execute(
-                "SELECT target_id, stat, AVG(value) AS avg_val FROM stat_ratings GROUP BY target_id, stat"
-            ).fetchall()
-            out = {}
-            for r in avgs:
-                tid = r["target_id"]
-                if tid not in out:
-                    out[tid] = {}
-                out[tid][r["stat"]] = round(r["avg_val"], 1)
-            my_ratings = _get_conn().execute(
-                "SELECT target_id, stat, value FROM stat_ratings WHERE rater_id = ?",
-                (user["id"],),
-            ).fetchall()
-            my_out = {}
-            for r in my_ratings:
-                tid = r["target_id"]
-                if tid not in my_out:
-                    my_out[tid] = {}
-                my_out[tid][r["stat"]] = r["value"]
-            self._send_json(200, {"averages": out, "myRatings": my_out})
-            return
-
         if parsed_path == "/api/rate-stat":
             target_id = data.get("target_id")
             stat = data.get("stat")
@@ -615,6 +608,23 @@ class Handler(BaseHTTPRequestHandler):
                     """,
                     (user["id"], target_id, stat, value, _now()),
                 )
+            self._send_json(200, {"ok": True})
+            return
+
+        if parsed_path == "/api/delmember":
+            if not _is_master(user["id"], user.get("username")):
+                self._send_json(403, {"error": "only master admin"})
+                return
+            target_id = data.get("target_id")
+            if not target_id:
+                self._send_json(400, {"error": "target_id required"})
+                return
+            with _lock, _get_conn():
+                _get_conn().execute("DELETE FROM members WHERE user_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM points WHERE target_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM member_stats WHERE user_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM personal_abilities WHERE user_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM stat_ratings WHERE target_id = ? OR rater_id = ?", (target_id, target_id))
             self._send_json(200, {"ok": True})
             return
 
