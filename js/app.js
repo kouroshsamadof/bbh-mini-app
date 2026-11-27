@@ -670,10 +670,12 @@ function renderRate() {
           const avg = mAvgs[k]?.avg ?? '—';
           const cnt = mAvgs[k]?.count ?? 0;
           const myVal = myR[k] ?? '';
-          const inputHtml = isMe ? '' : `<input type="number" min="0" max="100" class="rate-input" data-target="${m.id}" data-stat="${k}" value="${myVal}" placeholder="0-100" />`;
+          const selfInput = isMe
+      ? `<input type="number" min="0" max="100" class="rate-input" data-target="${m.id}" data-stat="iq" placeholder="امتیاز خود را وارد کن" />`
+      : '';
           return `<div class="rate-row">
             <span class="rate-label">${meta.emoji} ${meta.en}</span>
-            ${inputHtml}
+            ${isMe && k === 'iq' ? selfInput : ''}
             <span class="rate-avg">میانگین: ${toFa(avg)} (${toFa(cnt)})</span>
           </div>`;
         }).join('')}
