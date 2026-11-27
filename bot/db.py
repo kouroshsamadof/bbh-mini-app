@@ -122,18 +122,6 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS stat_ratings (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    rater_id    INTEGER NOT NULL,
-    target_id   INTEGER NOT NULL,
-    stat        TEXT NOT NULL CHECK (stat IN ('retardness', 'iq', 'simp', 'comedy')),
-    value       INTEGER NOT NULL CHECK (value BETWEEN 0 AND 100),
-    created_at  TEXT NOT NULL,
-    UNIQUE(rater_id, target_id, stat)
-);
-CREATE INDEX IF NOT EXISTS idx_stat_ratings_target ON stat_ratings(target_id);
-CREATE INDEX IF NOT EXISTS idx_stat_ratings_rater ON stat_ratings(rater_id);
 """
 
 _DEFAULT_SETTINGS = {
@@ -430,55 +418,6 @@ class Database:
     def delete_news(self, news_id: int) -> None:
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM news WHERE id = ?", (news_id,))
-
-    # ---------- امتیازدهی آمار توسط اعضا (stat ratings) ----------
-
-    def submit_stat_rating(self, rater_id: int, target_id: int, stat: str, value: int) -> None:
-        with self._lock, self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO stat_ratings(rater_id, target_id, stat, value, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(rater_id, target_id, stat) DO UPDATE SET
-                    value = excluded.value,
-                    created_at = excluded.created_at
-                """,
-                (rater_id, target_id, stat, value, _now()),
-            )
-
-    def get_stat_ratings_for_target(self, target_id: int) -> dict[str, list[int]]:
-        """همه‌ی امتیازهای داده‌شده به یک هدف را برمی‌گرداند."""
-        out = {s: [] for s in self.ALL_STATS}
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT stat, value FROM stat_ratings WHERE target_id = ?",
-                (target_id,),
-            ).fetchall()
-        for r in rows:
-            out[r["stat"]].append(r["value"])
-        return out
-
-    def get_stat_rating_averages(self) -> dict[int, dict[str, float]]:
-        """میانگین امتیازهای هر عضو را برمی‌گرداند."""
-        out: dict[int, dict[str, float]] = {}
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT target_id, stat, AVG(value) AS avg_val, COUNT(*) AS cnt FROM stat_ratings GROUP BY target_id, stat"
-            ).fetchall()
-        for r in rows:
-            tid = r["target_id"]
-            if tid not in out:
-                out[tid] = {s: 0.0 for s in self.ALL_STATS}
-            out[tid][r["stat"]] = round(r["avg_val"], 1)
-        return out
-
-    def get_all_stat_ratings(self) -> list[dict]:
-        """همه‌ی امتیازهای ثبت‌شده را برمی‌گرداند."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT rater_id, target_id, stat, value, created_at FROM stat_ratings ORDER BY created_at DESC"
-            ).fetchall()
-        return [dict(r) for r in rows]
 
     # ---------- حذف المباشرة‌ی استرایک (حذف یک استرایک از کاربر) ----------
 
