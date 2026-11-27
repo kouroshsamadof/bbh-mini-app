@@ -1173,7 +1173,7 @@ async def word_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند اطلاعات اعضا را ببینند.")
+        await msg.reply_text("Only admins can view member info.")
         return
     target, error = resolve_target(msg, context.args or [])
     if error:
@@ -1181,6 +1181,21 @@ async def cmd_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     member = db.get_member(target.user_id)
     await msg.reply_text(format_member_card(target.user_id, member))
+
+
+async def cmd_delmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not await is_master(update, context):
+        await msg.reply_text("Only master admin can delete members.")
+        return
+    target, error = resolve_target(msg, context.args or [])
+    if error:
+        await msg.reply_text(error)
+        return
+    if db.delete_member(target.user_id):
+        await msg.reply_text(f"Member {target.name} deleted.")
+    else:
+        await msg.reply_text("Member not found.")
 
 
 # ---------------------------------------------------------------- رأی‌گیری استرایک (strike voting)

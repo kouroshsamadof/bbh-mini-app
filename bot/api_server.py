@@ -596,6 +596,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
 
+        if parsed_path == "/api/delmember":
+            if not _is_master(user["id"], user.get("username")):
+                self._send_json(403, {"error": "only master admin"})
+                return
+            target_id = data.get("target_id")
+            if not target_id:
+                self._send_json(400, {"error": "target_id required"})
+                return
+            with _lock, _get_conn():
+                _get_conn().execute("DELETE FROM members WHERE user_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM points WHERE target_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM member_stats WHERE user_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM personal_abilities WHERE user_id = ?", (target_id,))
+                _get_conn().execute("DELETE FROM stat_ratings WHERE target_id = ? OR rater_id = ?", (target_id, target_id))
+            self._send_json(200, {"ok": True})
+            return
+
         self._send_json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):

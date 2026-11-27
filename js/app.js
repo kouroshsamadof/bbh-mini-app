@@ -572,11 +572,13 @@ function renderRate() {
     const mAvgs = avgs[m.id] || {};
     const myR = myRatings[m.id] || {};
     const isMe = m.id === ME_ID;
+    const delBtn = isAdmin ? `<button class="btn del-member-btn" data-mid="${m.id}" style="background:#d6403c;color:#fff;padding:4px 8px;font-size:11px;">🗑 حذف</button>` : '';
     return `<div class="rate-card ${isMe ? 'rate-me' : ''}">
       <div class="rate-head">
         ${avatarHtml(m.name, m.id, 36)}
         <div class="rate-name">${escapeHtml(m.name)}</div>
         ${isMe ? '<span class="you-badge">(شما)</span>' : ''}
+        ${delBtn}
       </div>
       <div class="rate-stats">
         ${STAT_KEYS.map(k => {
@@ -608,6 +610,26 @@ function renderRate() {
       }
       haptic('light');
       await submitStatRating(targetId, stat, val);
+    });
+  });
+
+  // Bind delete member buttons
+  box.querySelectorAll('.del-member-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mid = parseInt(btn.dataset.mid);
+      const member = MEMBERS.find(m => m.id === mid);
+      if (!member) return;
+      if (!confirm('حذف «' + member.name + '» از دیتابیس؟')) return;
+      haptic('medium');
+      const res = await apiCall('/api/delmember', { method: 'POST', body: JSON.stringify({ target_id: mid }) });
+      if (res && res.ok) {
+        showToast('✅ عضو حذف شد.');
+        await refreshState();
+        await fetchStatRatings();
+        renderAll();
+      } else {
+        showToast('❌ حذف ناموفق — ' + (res?.error || 'فقط ادمین اصلی می‌تواند حذف کند.'));
+      }
     });
   });
 }
