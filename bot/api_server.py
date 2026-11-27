@@ -9,6 +9,8 @@ Endpoints:
   POST /api/register     → ثبت‌نام خودت (name + age اختیاری)
   POST /api/ability      → تنظیم توانایی شخصی
   GET  /api/me           → اطلاعات کاربر فعلی
+  GET  /api/news         → خبر روز فعال
+  GET  /api/strike-votes → رأی‌گیری‌های استرایک فعال
 """
 import hashlib
 import hmac
@@ -66,7 +68,6 @@ def _get_conn():
 # -------------------------------------------------- اعتبارسنجی initData
 
 def validate_init_data(init_data: str, token: str) -> dict | None:
-    """اعتبارسنجی initData برای یک توکن مشخص (الگوریتم رسمی Telegram)."""
     if not init_data or not token:
         return None
     try:
@@ -89,7 +90,6 @@ def validate_init_data(init_data: str, token: str) -> dict | None:
 
 
 def validate_init_data_any(init_data: str) -> dict | None:
-    """initData را با هرکدام از توکن‌های پشتیبانی‌شده اعتبارسنجی می‌کند."""
     if not init_data:
         return None
     for token in VALID_TOKENS:
@@ -175,51 +175,32 @@ def build_state():
 
 
 def get_active_news(chat_id: int | None = None):
-    """آخرین خبر فعال (نامنتهی به انقضا) را برمی‌گرداند."""
     if chat_id is not None:
         row = _get_conn().execute(
-            """
-            SELECT * FROM news
-            WHERE chat_id = ? AND expires_at > ?
-            ORDER BY id DESC LIMIT 1
-            """,
+            "SELECT * FROM news WHERE chat_id = ? AND expires_at > ? ORDER BY id DESC LIMIT 1",
             (chat_id, _now()),
         ).fetchone()
     else:
         row = _get_conn().execute(
-            """
-            SELECT * FROM news
-            WHERE expires_at > ?
-            ORDER BY id DESC LIMIT 1
-            """,
+            "SELECT * FROM news WHERE expires_at > ? ORDER BY id DESC LIMIT 1",
             (_now(),),
         ).fetchone()
     return dict(row) if row else None
 
 
 def get_strike_votes(chat_id: int | None = None):
-    """لیست رأی‌گیری‌های استرایک فعال را برمی‌گرداند."""
     if chat_id is not None:
         rows = _get_conn().execute(
-            """
-            SELECT * FROM strike_votes
-            WHERE chat_id = ? AND status = 'open'
-            ORDER BY id DESC
-            """,
+            "SELECT * FROM strike_votes WHERE chat_id = ? AND status = 'open' ORDER BY id DESC",
             (chat_id,),
         ).fetchall()
     else:
         rows = _get_conn().execute(
-            """
-            SELECT * FROM strike_votes
-            WHERE status = 'open'
-            ORDER BY id DESC
-            """
+            "SELECT * FROM strike_votes WHERE status = 'open' ORDER BY id DESC"
         ).fetchall()
     result = []
     for r in rows:
         d = dict(r)
-        # شمارش رأی‌ها
         vote_rows = _get_conn().execute(
             "SELECT vote, COUNT(*) AS c FROM strike_vote_votes WHERE strike_id = ? GROUP BY vote",
             (d["id"],),
@@ -230,19 +211,6 @@ def get_strike_votes(chat_id: int | None = None):
         d["voters"] = sum(counts.values())
         result.append(d)
     return result
-
-
-def judgments_history(limit: int = 30) -> list[dict]:
-    rows = _get_conn().execute(
-        """
-        SELECT id, target_id, target_name, reason, status, winner, admin_name, created_at, closes_at
-        FROM judgments
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def ensure_stub(cur_user: dict, name: str | None = None, age: int | None = None):
@@ -323,14 +291,7 @@ class Handler(BaseHTTPRequestHandler):
             if not user:
                 self._send_json(401, {"error": "not authorized"})
                 return
-            self._send_json(200, {"members": build_state(), "history": judgments_history(), "serverTime": _now()})
-            return
-        if path == "/api/history":
-            user = _require_user(self.headers.get("X-Init-Data"))
-            if not user:
-                self._send_json(401, {"error": "not authorized"})
-                return
-            self._send_json(200, {"history": judgments_history()})
+            self._send_json(200, {"members": build_state(), "serverTime": _now()})
             return
         if path == "/api/news":
             user = _require_user(self.headers.get("X-Init-Data"))
