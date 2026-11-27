@@ -121,21 +121,35 @@ async function refreshState() {
 
 async function fetchNews() {
   if (!IN_TELEGRAM) {
-    // حالت محلی — اگر در localStorage خبری ذخیره شده است، نمایش بده
-    return state.news || null;
+    return state.news || [];
   }
   try {
     const res = await apiCall('/api/news');
-    if (res && res.news) {
+    if (res && Array.isArray(res.news)) {
       state.news = res.news;
       saveLocalState(state);
       return res.news;
     }
-    state.news = null;
+    state.news = [];
     saveLocalState(state);
-    return null;
+    return [];
   } catch (e) {
-    return state.news || null;
+    return state.news || [];
+  }
+}
+
+async function postNews(content) {
+  if (!IN_TELEGRAM) { showToast('❌ این قابلیت فقط داخل تلگرام کار می‌کند.'); return false; }
+  const res = await apiCall('/api/news', { method: 'POST', body: JSON.stringify({ content }) });
+  if (res && res.ok) {
+    showToast('✅ خبر ثبت شد.');
+    haptic('light');
+    await fetchNews();
+    renderNews();
+    return true;
+  } else {
+    showToast('❌ ثبت ناموفق — ' + (res?.error || 'دوباره تلاش کن.'));
+    return false;
   }
 }
 
@@ -364,29 +378,30 @@ function renderRankings() {
 
 /* ---------------------------------------------------------- خبر روز */
 function renderNews() {
-  const n = state.news;
   const box = $('#newsBox');
   if (!box) return;
-  if (!n) {
-    box.innerHTML = `<div class="empty-state">📭 خبر فعالی ثبت نشده است.</div>`;
+  const newsList = state.news || [];
+  if (!Array.isArray(newsList) || newsList.length === 0) {
+    box.innerHTML = `<div class="empty-state">📭 خبری ثبت نشده است.</div>`;
     return;
   }
-  let expiresStr = '—';
-  try {
-    const exp = new Date(n.expires_at || 0);
-    if (!isNaN(exp.getTime())) {
-      expiresStr = exp.toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    }
-  } catch (e) { /* ok */ }
-  box.innerHTML = `
-    <div class="news-card">
+  box.innerHTML = newsList.map(n => {
+    let createdStr = '—';
+    try {
+      const d = new Date(n.created_at || 0);
+      if (!isNaN(d.getTime())) {
+        createdStr = d.toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+    } catch (e) { /* ok */ }
+    return `<div class="news-card">
       <div class="news-head">
-        <span class="news-tag">📢 خبر روز</span>
-        <span class="news-by">توسط ${escapeHtml(n.admin_name || 'ادمین')}</span>
+        <span class="news-tag">📢 خبر</span>
+        <span class="news-by">توسط ${escapeHtml(n.author_name || 'ناشناس')}</span>
       </div>
       <div class="news-body">${escapeHtml(n.content)}</div>
-      <div class="news-foot">⏳ تا ${expiresStr}</div>
+      <div class="news-foot">🗓 ${createdStr}</div>
     </div>`;
+  }).join('');
 }
 
 /* ---------------------------------------------------------- رأی‌گیری استرایک */
@@ -588,6 +603,20 @@ function bindEvents() {
   if (removeBtn) removeBtn.addEventListener('click', () => { haptic('light'); removeStrike(); });
   const clearBtn = $('#clearStrikesBtn');
   if (clearBtn) clearBtn.addEventListener('click', () => { haptic('medium'); clearStrikes(); });
+
+  // News post button
+  const postNewsBtn = $('#postNewsBtn');
+  if (postNewsBtn) postNewsBtn.addEventListener('click', async () => {
+    const input = $('#newsContentInput');
+    const content = (input?.value || '').trim();
+    if (content.length < 2) { $('#newsPostNote').textContent = '❌ متن خبر خیلی کوتاه است.'; return; }
+    $('#newsPostNote').textContent = '⏳ در حال ثبت…';
+    const ok = await postNews(content);
+    if (ok) {
+      if (input) input.value = '';
+      $('#newsPostNote').textContent = '✅ خبر ثبت شد.';
+    }
+  });
 }
 
 function safeRenderAll() {

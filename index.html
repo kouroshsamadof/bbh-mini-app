@@ -105,10 +105,20 @@
     <section class="screen" id="screen-news">
       <div class="card">
         <div class="card-head">
-          <h2>📢 خبر روز</h2>
+          <h2>📢 خبرها</h2>
           <button class="link-btn" data-nav="home">بازگشت به خانه</button>
         </div>
         <div id="newsBox"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>✍️ نوشتن خبر</h2>
+        </div>
+        <div class="news-write">
+          <textarea id="newsContentInput" class="soft-field" rows="3" placeholder="متن خبر را بنویسید..." autocomplete="off"></textarea>
+          <button class="btn primary" id="postNewsBtn">📢 ثبت خبر</button>
+          <div class="save-note" id="newsPostNote"></div>
+        </div>
       </div>
     </section>
 

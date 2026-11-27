@@ -197,18 +197,18 @@ def build_state():
     return out_members
 
 
-def get_active_news(chat_id: int | None = None):
+def get_all_news(chat_id: int | None = None, limit: int = 50):
     if chat_id is not None:
-        row = _get_conn().execute(
-            "SELECT * FROM news WHERE chat_id = ? AND expires_at > ? ORDER BY id DESC LIMIT 1",
-            (chat_id, _now()),
-        ).fetchone()
+        rows = _get_conn().execute(
+            "SELECT * FROM news WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+            (chat_id, limit),
+        ).fetchall()
     else:
-        row = _get_conn().execute(
-            "SELECT * FROM news WHERE expires_at > ? ORDER BY id DESC LIMIT 1",
-            (_now(),),
-        ).fetchone()
-    return dict(row) if row else None
+        rows = _get_conn().execute(
+            "SELECT * FROM news ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_strike_votes(chat_id: int | None = None):
@@ -323,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             qs = dict(parse_qsl(parsed_path[1])) if len(parsed_path) > 1 else {}
             chat_id = int(qs["chat_id"]) if qs.get("chat_id") else None
-            news = get_active_news(chat_id)
+            news = get_all_news(chat_id)
             self._send_json(200, {"news": news})
             return
         if path == "/api/strike-votes":
@@ -513,6 +513,24 @@ class Handler(BaseHTTPRequestHandler):
                     (target_id,),
                 )
             self._send_json(200, {"ok": True})
+            return
+
+        if parsed_path == "/api/news":
+            content = (data.get("content") or "").strip()
+            if len(content) < 2:
+                self._send_json(400, {"error": "content too short"})
+                return
+            if len(content) > 500:
+                self._send_json(400, {"error": "content too long"})
+                return
+            ensure_stub(user)
+            with _lock, _get_conn():
+                cur = _get_conn().execute(
+                    "INSERT INTO news(chat_id, author_id, author_name, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (0, user["id"], user["first_name"], content, _now()),
+                )
+                news_id = cur.lastrowid
+            self._send_json(200, {"ok": True, "id": news_id})
             return
 
         self._send_json(404, {"error": "not found"})
