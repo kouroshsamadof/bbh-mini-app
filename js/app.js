@@ -267,12 +267,15 @@ function renderHome() {
       <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
     </div>`;
 
+  const avgs = (state.statRatings || {}).averages || {};
+  const myAvgs = avgs[me.id] || {};
   $('#homeStatsPreview').innerHTML = STAT_KEYS.map(k => {
     const meta = STAT_META[k];
+    const v = myAvgs[k] ?? 0;
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
-      <div class="bar-track"><div class="bar-fill" data-fill="0" style="width:0%"></div></div>
-      <div class="bar-value">${toFa(0)}٪</div>
+      <div class="bar-track"><div class="bar-fill" data-fill="${v}" style="width:${v}%"></div></div>
+      <div class="bar-value">${toFa(v)}٪</div>
     </div>`;
   }).join('');
 }
@@ -328,7 +331,7 @@ function renderStats() {
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
       <div class="bar-track"><div class="bar-fill ${colorClass}" data-fill="${v}" style="width:${v}%"></div></div>
-      <div class="bar-value">${toFa(v)}٪ ${k === 'iq' ? '(امتیاز 되-sampled)' : ''}<small style="color:var(--muted);font-size:9px">(میانگین جامعه)</small></div>
+      <div class="bar-value">${toFa(v)}٪ <small style="color:var(--muted);font-size:9px">(میانگین جامعه)</small></div>
     </div>`;
   }).join('');
 
@@ -379,6 +382,7 @@ function setMeInList(me) {
 function renderRankings() {
   const rows = [...MEMBERS].sort((a, b) => finalOf(b) - finalOf(a));
   const medals = ['🥇', '🥈', '🥉'];
+  const avgs = (state.statRatings || {}).averages || {};
   $('#rankingList').innerHTML = rows.length === 0
     ? `<div class="empty-state">🏁 هنوز عضوی نداریم؛ یک نفر را از تب «اعضا» اضافه کن!</div>`
     : rows.slice(0, 10).map((m, i) => {
@@ -389,7 +393,7 @@ function renderRankings() {
           ${avatarHtml(m.name, m.id, 40)}
           <div class="rank-body">
             <div class="rank-name">${escapeHtml(m.name)}</div>
-            <div class="rank-sentence">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ${STAT_KEYS.map(k => { const avg = mAvgs[k] ?? 0; const meta = STAT_META[k]; return `${meta.emoji} ${toFa(avg)}`; }).join(' · ')}</div>
+            <div class="rank-sentence">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ${STAT_KEYS.map(k => { const avg = (avgs[m.id] || {})[k] ?? 0; const meta = STAT_META[k]; return `${meta.emoji} ${toFa(avg)}`; }).join(' · ')}</div>
           </div>
           <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
         </div>`;
@@ -635,77 +639,6 @@ async function fetchStatRatings() {
   }
 }
 
-async function submitStatRating(targetId, stat, value) {
-  if (!IN_TELEGRAM) { showToast('❌ این قابلیت فقط داخل تلگرام کار می‌کند.'); return false; }
-  const res = await apiCall('/api/rate-stat', { method: 'POST', body: JSON.stringify({ target_id: targetId, stat, value }) });
-  if (res && res.ok) {
-    showToast('✅ امتیاز ثبت شد.');
-    haptic('light');
-    await fetchStatRatings();
-    renderRate();
-    return true;
-  } else {
-    showToast('❌ ثبت ناموفق — ' + (res?.error || 'دوباره تلاش کن.'));
-    return false;
-  }
-}
-
-function renderRate() {
-  const box = $('#rateBox');
-  if (!box) return;
-  const ratings = state.statRatings || {};
-  const avgs = ratings.averages || {};
-  const myRatings = ratings.myRatings || {};
-  const me = MY_MEMBER();
-  if (MEMBERS.length === 0) {
-    box.innerHTML = `<div class="empty-state">👥 هنوز عضوی ثبت نشده است.</div>`;
-    return;
-  }
-  box.innerHTML = MEMBERS.map(m => {
-    const mAvgs = avgs[m.id] || {};
-    const myR = myRatings[m.id] || {};
-    const isMe = m.id === ME_ID;
-    return `<div class="rate-card ${isMe ? 'rate-me' : ''}">
-      <div class="rate-head">
-        ${avatarHtml(m.name, m.id, 36)}
-        <div class="rate-name">${escapeHtml(m.name)}</div>
-        ${isMe ? '<span class="you-badge">(شما)</span>' : ''}
-      </div>
-      <div class="rate-stats">
-        ${STAT_KEYS.map(k => {
-          const meta = STAT_META[k];
-          const avg = mAvgs[k]?.avg ?? '—';
-          const cnt = mAvgs[k]?.count ?? 0;
-          const myVal = myR[k] ?? '';
-          const selfInput = isMe
-      ? `<input type="number" min="0" max="100" class="rate-input" data-target="${m.id}" data-stat="iq" placeholder="امتیاز خود را وارد کن" />`
-      : '';
-          return `<div class="rate-row">
-            <span class="rate-label">${meta.emoji} ${meta.en}</span>
-            ${isMe && k === 'iq' ? selfInput : ''}
-            <span class="rate-avg">میانگین: ${toFa(avg)} (${toFa(cnt)})</span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>`;
-  }).join('');
-
-  box.querySelectorAll('.rate-input').forEach(input => {
-    input.addEventListener('change', async () => {
-      const targetId = parseInt(input.dataset.target);
-      const stat = input.dataset.stat;
-      const val = parseInt(input.value);
-      if (isNaN(val) || val < 0 || val > 100) {
-        input.value = '';
-        showToast('❌ امتیاز باید بین ۰ تا ۱۰۰ باشد.');
-        return;
-      }
-      haptic('light');
-      await submitStatRating(targetId, stat, val);
-    });
-  });
-}
-
 /* ---------------------------------------------------------- رندر همه */
 function renderAll() {
   renderHome();
@@ -713,7 +646,6 @@ function renderAll() {
   renderRankings();
   renderNews();
   renderStrikeVotes();
-  renderRate();
   populateStrikeTargetSelect();
 }
 
