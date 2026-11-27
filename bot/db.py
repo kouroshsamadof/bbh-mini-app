@@ -80,15 +80,14 @@ CREATE INDEX IF NOT EXISTS idx_stat_proposals_target ON stat_proposals(target_id
 CREATE TABLE IF NOT EXISTS news (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id     INTEGER NOT NULL,
-    admin_id    INTEGER,
-    admin_name  TEXT,
+    author_id   INTEGER,
+    author_name TEXT,
     content     TEXT NOT NULL,
     message_id  INTEGER,
-    created_at  TEXT NOT NULL,
-    expires_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_news_chat ON news(chat_id);
-CREATE INDEX IF NOT EXISTS idx_news_expires ON news(expires_at);
+CREATE INDEX IF NOT EXISTS idx_news_created ON news(created_at);
 
 CREATE TABLE IF NOT EXISTS strike_votes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -382,40 +381,32 @@ class Database:
 
     # ---------- خبر روز (news) ----------
 
-    def create_news(self, chat_id: int, content: str, admin_id: int | None,
-                    admin_name: str | None, message_id: int | None,
-                    expires_at: str) -> int:
+    def create_news(self, chat_id: int, content: str, author_id: int | None,
+                    author_name: str | None, message_id: int | None = None) -> int:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 """
-                INSERT INTO news(chat_id, admin_id, admin_name, content, message_id,
-                                 created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO news(chat_id, author_id, author_name, content, message_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, admin_id, admin_name, content, message_id, _now(), expires_at),
+                (chat_id, author_id, author_name, content, message_id, _now()),
             )
         return int(cur.lastrowid)
 
-    def deactivate_previous_news(self, chat_id: int) -> None:
-        """خبرهای قبلی فعال همین چت را حذف می‌کند تا فقط آخرین خبر باقی بماند."""
-        with self._lock, self._conn:
-            self._conn.execute(
-                "DELETE FROM news WHERE chat_id = ? AND expires_at > ?",
-                (chat_id, _now()),
-            )
-
-    def get_active_news(self, chat_id: int):
-        """آخرین خبر فعال (نامنتهی به انقضا) را برمی‌گرداند."""
+    def list_all_news(self, chat_id: int | None = None, limit: int = 50, offset: int = 0) -> list[sqlite3.Row]:
+        """همه‌ی خبرها را برمی‌گرداند (بدون انقضا)."""
         with self._lock:
-            row = self._conn.execute(
-                """
-                SELECT * FROM news
-                WHERE chat_id = ? AND expires_at > ?
-                ORDER BY id DESC LIMIT 1
-                """,
-                (chat_id, _now()),
-            ).fetchone()
-        return row
+            if chat_id is not None:
+                rows = self._conn.execute(
+                    "SELECT * FROM news WHERE chat_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (chat_id, limit, offset),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM news ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+        return list(rows)
 
     def get_news(self, news_id: int):
         with self._lock:
@@ -423,15 +414,6 @@ class Database:
                 "SELECT * FROM news WHERE id = ?", (news_id,)
             ).fetchone()
         return row
-
-    def list_expired_news(self) -> list[sqlite3.Row]:
-        """خبرهای منقضی‌شده را برای حذف خودکار برمی‌گرداند."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM news WHERE expires_at <= ? ORDER BY id",
-                (_now(),),
-            ).fetchall()
-        return list(rows)
 
     def delete_news(self, news_id: int) -> None:
         with self._lock, self._conn:

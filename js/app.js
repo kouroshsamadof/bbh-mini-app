@@ -70,6 +70,7 @@ const apiCall = async (path, opts = {}) => {
 };
 
 const state = loadLocalState() || defaultLocalState();
+let isAdmin = false;
 
 const applyMembers = list => {
   state.members.length = 0;
@@ -88,6 +89,8 @@ const applyMembers = list => {
 async function refreshState() {
   // حالت زنده — داخل تلگرام
   if (IN_TELEGRAM) {
+    const meRes = await apiCall('/api/me');
+    if (meRes) isAdmin = !!meRes.isAdmin;
     const res = await apiCall('/api/state');
     if (res && Array.isArray(res.members) && res.members.length > 0) {
       applyMembers(res.members);
@@ -417,6 +420,9 @@ function renderStrikeVotes() {
   const box = $('#strikeVoteBox');
   if (!box) return;
   const votes = state.strikeVotes || [];
+  // Show/hide strike actions card based on admin status
+  const actionsCard = $('#strikeActionsCard');
+  if (actionsCard) actionsCard.style.display = isAdmin ? 'block' : 'none';
   if (votes.length === 0) {
     box.innerHTML = `<div class="empty-state">⚖️ هیچ رأی‌گیری استرایک بازی وجود ندارد.</div>`;
     return;

@@ -869,83 +869,50 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند خبر ثبت کنند.")
-        return
-    if chat is None or chat.type == "private":
-        await msg.reply_text("📢 خبر روز فقط داخل گروه قابل ثبت است.")
-        return
+
     args = list(context.args or [])
     if not args:
-        current = db.get_active_news(chat.id)
-        if current:
-            try:
-                expires = ftext.fa_datetime(datetime.fromisoformat(current["expires_at"]))
-            except ValueError:
-                expires = current["expires_at"]
-            await msg.reply_text(
-                f"📢 خبر فعلی:\n\n{current['content']}\n\n⏳ تا: {expires}"
-            )
+        news_list = db.list_all_news(chat.id if chat else None, limit=5)
+        if news_list:
+            lines = ["\u00f0\u0178\u0093\u00a2 Last news:", ""]
+            for n in news_list:
+                author = n["author_name"] or "Unknown"
+                lines.append("\u00f0\u0178\u0093\u00b0 " + n["content"])
+                lines.append("   \u00f0\u0178\u0091\u00a4 By: " + author + " | \u00f0\u0178\u0097\u0093 " + ftext.fa_datetime(datetime.fromisoformat(n["created_at"])))
+                lines.append("")
+            await msg.reply_text("\n".join(lines))
         else:
-            await msg.reply_text("❓ خبر فعالی ثبت نشده است.\nاشاره: /news متن خبر روز")
-        return
-    content = " ".join(args).strip()
-    if len(content) < 2:
-        await msg.reply_text("❌ متن خبر خیلی کوتاه است.")
-        return
-    if len(content) > MAX_NEWS_LEN:
-        await msg.reply_text(f"❌ متن خبر خیلی بلند است (حداکثر {MAX_NEWS_LEN} نویسه).")
-        return
-    db.deactivate_previous_news(chat.id)
-    expires = datetime.now() + timedelta(hours=NEWS_HOURS)
-    admin_id = user.id if user else None
-    admin_name = display_name(user) if user else "ادمین"
-    sent = await msg.reply_text(
-        f"📢 خبر روز:\n\n{content}\n\n"
-        f"👮 توسط: {admin_name}\n"
-        f"⏳ خود حذف می‌شود پس از ۲۴ ساعت"
-    )
-    news_id = db.create_news(
-        chat_id=chat.id, content=content, admin_id=admin_id,
-        admin_name=admin_name, message_id=sent.message_id,
-        expires_at=expires.isoformat(timespec="seconds"),
-    )
-    schedule_news_delete(context.application, news_id, expires)
-    logger.info("خبر #%s ثبت شد در چت %s، تا %s", news_id, chat.id, expires.isoformat())
-
-
-def schedule_news_delete(app, news_id: int, when: datetime) -> None:
-    try:
-        app.job_queue.run_once(
-            news_delete_job, when=when, data=news_id, name=f"news_{news_id}",
-        )
-    except Exception as exc:
-        logger.warning("برنامه‌ریزی حذف خبر ناموفق: %s", exc)
-
-
-async def news_delete_job(context: ContextTypes.DEFAULT_TYPE):
-    await delete_expired_news_by_id(context, context.job.data)
-
-
-async def delete_expired_news_by_id(context: ContextTypes.DEFAULT_TYPE, news_id: int):
-    n = db.get_news(news_id)
-    if not n:
-        return
-    try:
-        expires_at = datetime.fromisoformat(n["expires_at"])
-    except ValueError:
-        expires_at = None
-    if expires_at is not None and expires_at > datetime.now() + timedelta(seconds=2):
-        return
-    if n["message_id"]:
-        try:
-            await context.application.bot.delete_message(
-                chat_id=n["chat_id"], message_id=n["message_id"],
+            await msg.reply_text(
+                "No news yet.\n"
+                "Usage: /news your news text"
             )
-        except Exception as exc:
-            logger.warning("حذف پیام خبر #%s ناموفق: %s", news_id, exc)
-    db.delete_news(news_id)
-    logger.info("خبر #%s در چت %s حذف شد (انقضا)", news_id, n["chat_id"])
+        return
+
+    content_text = " ".join(args).strip()
+    if len(content_text) < 2:
+        await msg.reply_text("News text too short.")
+        return
+    if len(content_text) > MAX_NEWS_LEN:
+        await msg.reply_text("News text too long (max " + str(MAX_NEWS_LEN) + " chars).")
+        return
+
+    author_id = user.id if user else None
+    author_name = display_name(user) if user else "Unknown"
+
+    sent = await msg.reply_text(
+        "\u00f0\u0178\u0093\u00a2 News:\n\n" + content_text + "\n\n"
+        "\u00f0\u0178\u0091\u00a4 By: " + author_name
+    )
+
+    news_id = db.create_news(
+        chat_id=chat.id if chat else 0,
+        content=content_text,
+        author_id=author_id,
+        author_name=author_name,
+        message_id=sent.message_id,
+    )
+
+    logger.info("News #%s posted in chat %s by %s", news_id, chat.id if chat else 0, author_name)
 
 
 # ---------------------------------------------------------------- ثبت اخطار / استرایک / امتیاز / حذف استرایک
@@ -1003,8 +970,8 @@ async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: st
     msg = update.effective_message
     if msg is None:
         return
-    if not await is_admin(update, context):
-        await msg.reply_text("⛔️ فقط ادمین‌های کانال یا ادمین‌های اصلی می‌توانند این دستور را اجرا کنند.")
+    if kind != "plus" and not await is_admin(update, context):
+        await msg.reply_text("Only admins can give warnings or strikes.")
         return
     target, error = resolve_target(msg, context.args or [])
     if error:
@@ -1013,6 +980,12 @@ async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: st
         await msg.reply_text(f"{error}\n\nمثال: {example_word} @یوزرنیم دلیل")
         return
     reason = " ".join(target.rest).strip() or None
+    if not reason and kind == "plus":
+        await msg.reply_text("Please provide a reason for the plus point.\nExample: /plus @user good teamwork")
+        return
+    if not reason and kind == "plus":
+        await msg.reply_text("Please provide a reason for the plus point.\nExample: /plus @user good teamwork")
+        return
     user = update.effective_user
     if posted_as_chat(update):
         admin_id = None
@@ -1054,6 +1027,8 @@ async def do_action(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: st
     lines = [f"✅ {meta['label']} برای «{target.name}» ثبت شد ({sign}{ftext.fa_digits(scoring.POINTS[kind])})."]
     if reason:
         lines.append(f"💬 دلیل: {reason}")
+    lines.append("")
+    lines.append(f"Given by: {admin_name}")
     lines.append("")
     lines.append(compact_stats_line(stats))
     await msg.reply_text("\n".join(lines))
@@ -1419,19 +1394,6 @@ async def on_start(app):
     if strikes:
         logger.info("%d رأی‌گیری استرایک نیمه‌کاره بازیابی شد", len(strikes))
 
-    # خبرهای منقضی‌شده را بعد از ری‌استارت پاک می‌کنیم
-    expired = db.list_expired_news()
-    for n in expired:
-        if n["message_id"]:
-            try:
-                await app.bot.delete_message(
-                    chat_id=n["chat_id"], message_id=n["message_id"],
-                )
-            except Exception:
-                pass
-        db.delete_news(n["id"])
-    if expired:
-        logger.info("%d خبر منقضی‌شده بعد از ری‌استارت پاک شد", len(expired))
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
