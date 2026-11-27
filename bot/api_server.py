@@ -44,6 +44,14 @@ DB_PATH = os.environ.get("SHARED_DB") or os.environ.get("DB_PATH") or os.path.jo
 MAIN_BOT_TOKEN = os.environ.get("BBH_MAIN_BOT_TOKEN") or os.environ.get("BOT_TOKEN", "")
 MINI_BOT_TOKEN = os.environ.get("MINI_BOT_TOKEN") or os.environ.get("BOT_TOKEN", "")
 VALID_TOKENS = list({t for t in (MAIN_BOT_TOKEN, MINI_BOT_TOKEN) if t})
+
+def _is_master(user_id: int) -> bool:
+    raw = os.environ.get("MASTER_ADMIN_IDS", "")
+    for part in raw.split(","):
+        part = part.strip()
+        if part and part.isdigit() and int(part) == user_id:
+            return True
+    return False
 ORIGIN_ALLOWED = os.environ.get("ORIGIN_ALLOWED", "*")
 HOST = os.environ.get("HOST", os.environ.get("API_HOST", "127.0.0.1"))
 PORT = int(os.environ.get("PORT", os.environ.get("API_PORT", "8787")))
@@ -357,6 +365,139 @@ class Handler(BaseHTTPRequestHandler):
                     (user["id"], ability, _now()),
                 )
             self._send_json(200, {"ok": True, "ability": ability})
+            return
+
+        if parsed_path == "/api/strike-vote-start":
+            target_id = data.get("target_id")
+            target_name = data.get("target_name")
+            reason = data.get("reason")
+            if not target_id or not target_name:
+                self._send_json(400, {"error": "target_id and target_name required"})
+                return
+            if not _is_master(user["id"]):
+                self._send_json(403, {"error": "only master admin"})
+                return
+            # Check for existing open vote
+            existing = _get_conn().execute(
+                "SELECT id FROM strike_votes WHERE target_id = ? AND status = 'open'",
+                (target_id,),
+            ).fetchone()
+            if existing:
+                self._send_json(409, {"error": "open vote already exists"})
+                return
+            from datetime import timedelta
+            expires = (datetime.now() + timedelta(minutes=5)).isoformat(timespec="seconds")
+            with _lock, _get_conn():
+                cur = _get_conn().execute(
+                    """
+                    INSERT INTO strike_votes(chat_id, target_id, target_name, proposer_id,
+                                             proposer_name, reason, status, created_at, closes_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                    """,
+                    (0, target_id, target_name, user["id"], user["first_name"], reason, _now(), expires),
+                )
+                vid = cur.lastrowid
+            self._send_json(200, {"ok": True, "vid": vid})
+            return
+
+        if parsed_path == "/api/strike-vote-vote":
+            vid = data.get("vid")
+            vote = data.get("vote")
+            if not vid or vote not in ("strike", "clear"):
+                self._send_json(400, {"error": "invalid vid or vote"})
+                return
+            # Check if vote exists and is open
+            sv = _get_conn().execute(
+                "SELECT * FROM strike_votes WHERE id = ? AND status = 'open'", (vid,)
+            ).fetchone()
+            if not sv:
+                self._send_json(404, {"error": "vote not found or closed"})
+                return
+            if user["id"] == sv["target_id"]:
+                self._send_json(403, {"error": "cannot vote on own vote"})
+                return
+            with _lock, _get_conn():
+                _get_conn().execute(
+                    """
+                    INSERT INTO strike_vote_votes(strike_id, user_id, user_name, vote, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(strike_id, user_id) DO UPDATE SET
+                        vote = excluded.vote,
+                        user_name = excluded.user_name,
+                        created_at = excluded.created_at
+                    """,
+                    (vid, user["id"], user["first_name"], vote, _now()),
+                )
+            self._send_json(200, {"ok": True})
+            return
+
+        if parsed_path == "/api/strike-vote-close":
+            vid = data.get("vid")
+            if not vid:
+                self._send_json(400, {"error": "invalid vid"})
+                return
+            sv = _get_conn().execute(
+                "SELECT * FROM strike_votes WHERE id = ? AND status = 'open'", (vid,)
+            ).fetchone()
+            if not sv:
+                self._send_json(404, {"error": "vote not found or closed"})
+                return
+            if user["id"] != sv["proposer_id"]:
+                self._send_json(403, {"error": "only proposer can close"})
+                return
+            # Count votes
+            vote_rows = _get_conn().execute(
+                "SELECT vote, COUNT(*) AS c FROM strike_vote_votes WHERE strike_id = ? GROUP BY vote",
+                (vid,),
+            ).fetchall()
+            counts = {vr["vote"]: vr["c"] for vr in vote_rows}
+            strikes = counts.get("strike", 0)
+            clears = counts.get("clear", 0)
+            winner = "strike" if strikes >= clears else "clear"
+            with _lock, _get_conn():
+                _get_conn().execute(
+                    "UPDATE strike_votes SET status = 'closed', winner = ? WHERE id = ?",
+                    (winner, vid),
+                )
+            self._send_json(200, {"ok": True, "winner": winner})
+            return
+
+        if parsed_path == "/api/unstrike":
+            if not _is_master(user["id"]):
+                self._send_json(403, {"error": "only master admin"})
+                return
+            target_id = data.get("target_id")
+            if not target_id:
+                self._send_json(400, {"error": "target_id required"})
+                return
+            reason = data.get("reason")
+            # Find and delete the most recent strike point
+            row = _get_conn().execute(
+                "SELECT id FROM points WHERE target_id = ? AND type = 'strike' ORDER BY id DESC LIMIT 1",
+                (target_id,),
+            ).fetchone()
+            if not row:
+                self._send_json(404, {"error": "no strike to remove"})
+                return
+            with _lock, _get_conn():
+                _get_conn().execute("DELETE FROM points WHERE id = ?", (row["id"],))
+            self._send_json(200, {"ok": True})
+            return
+
+        if parsed_path == "/api/clearstrikes":
+            if not _is_master(user["id"]):
+                self._send_json(403, {"error": "only master admin"})
+                return
+            target_id = data.get("target_id")
+            if not target_id:
+                self._send_json(400, {"error": "target_id required"})
+                return
+            with _lock, _get_conn():
+                _get_conn().execute(
+                    "DELETE FROM points WHERE target_id = ? AND type = 'strike'",
+                    (target_id,),
+                )
+            self._send_json(200, {"ok": True})
             return
 
         self._send_json(404, {"error": "not found"})

@@ -359,6 +359,197 @@ function renderRankings() {
     : rows.length === 0 ? 'اول ثبت‌نام کن و رتبه بگیر!' : '';
 }
 
+/* ---------------------------------------------------------- خبر روز */
+function renderNews() {
+  const n = state.news;
+  const box = $('#newsBox');
+  if (!box) return;
+  if (!n) {
+    box.innerHTML = `<div class="empty-state">📭 خبر فعالی ثبت نشده است.</div>`;
+    return;
+  }
+  let expiresStr = '—';
+  try {
+    const exp = new Date(n.expires_at || 0);
+    if (!isNaN(exp.getTime())) {
+      expiresStr = exp.toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+  } catch (e) { /* ok */ }
+  box.innerHTML = `
+    <div class="news-card">
+      <div class="news-head">
+        <span class="news-tag">📢 خبر روز</span>
+        <span class="news-by">توسط ${escapeHtml(n.admin_name || 'ادمین')}</span>
+      </div>
+      <div class="news-body">${escapeHtml(n.content)}</div>
+      <div class="news-foot">⏳ تا ${expiresStr}</div>
+    </div>`;
+}
+
+/* ---------------------------------------------------------- رأی‌گیری استرایک */
+async function voteStrike(vid, vote) {
+  if (!IN_TELEGRAM) { showToast('❌ این قابلیت فقط داخل تلگرام کار می‌کند.'); return; }
+  const res = await apiCall('/api/strike-vote-vote', { method: 'POST', body: JSON.stringify({ vid, vote }) });
+  if (res && res.ok) {
+    showToast('✅ رأی شما ثبت شد.');
+    await fetchStrikeVotes();
+    renderStrikeVotes();
+  } else {
+    showToast('❌ رأی ثبت نشد — دوباره تلاش کن.');
+  }
+}
+
+async function closeStrikeVote(vid) {
+  if (!IN_TELEGRAM) { showToast('❌ این قابلیت فقط داخل تلگرام کار می‌کند.'); return; }
+  const res = await apiCall('/api/strike-vote-close', { method: 'POST', body: JSON.stringify({ vid }) });
+  if (res && res.ok) {
+    showToast('🏁 رأی‌گیری بسته شد.');
+    await fetchStrikeVotes();
+    renderStrikeVotes();
+    await refreshState();
+    renderAll();
+  } else {
+    showToast('❌ بستن ناموفق — فقط پیشنهاددهنده می‌تواند ببندد.');
+  }
+}
+
+function renderStrikeVotes() {
+  const box = $('#strikeVoteBox');
+  if (!box) return;
+  const votes = state.strikeVotes || [];
+  if (votes.length === 0) {
+    box.innerHTML = `<div class="empty-state">⚖️ هیچ رأی‌گیری استرایک بازی وجود ندارد.</div>`;
+    return;
+  }
+  box.innerHTML = votes.map(v => {
+    const strikes = v.strikes || 0;
+    const clears = v.clears || 0;
+    const voters = v.voters || 0;
+    const isProposer = ME_ID && v.proposer_id === ME_ID;
+    let expiresStr = '—';
+    try {
+      const exp = new Date(v.closes_at || 0);
+      if (!isNaN(exp.getTime())) {
+        expiresStr = exp.toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+    } catch (e) { /* ok */ }
+    const closeBtn = isProposer ? `<button class="btn primary strike-close-btn" data-vid="${v.id}">🏁 اعلام نتیجه</button>` : '';
+    return `<div class="strike-card">
+      <div class="strike-head">
+        <span class="strike-tag">🔴 استرایک</span>
+        <span class="strike-by">توسط ${escapeHtml(v.proposer_name || 'ادمین')}</span>
+      </div>
+      <div class="strike-target">⚖️ «${escapeHtml(v.target_name || '—')}»</div>
+      ${v.reason ? `<div class="strike-reason">💬 ${escapeHtml(v.reason)}</div>` : ''}
+      <div class="strike-stats">
+        <span class="strike-stat strike">🔴 استرایک: ${toFa(strikes)}</span>
+        <span class="strike-stat clear">🟢 پاک کردن: ${toFa(clears)}</span>
+        <span class="strike-stat">👥 ${toFa(voters)}</span>
+      </div>
+      <div class="strike-vote-btns">
+        <button class="btn strike-vote-btn" data-vid="${v.id}" data-vote="strike">🔴 استرایک</button>
+        <button class="btn strike-clear-btn" data-vid="${v.id}" data-vote="clear">🟢 پاک کردن</button>
+        ${closeBtn}
+      </div>
+      <div class="strike-foot">⏳ تا ${expiresStr}</div>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('.strike-vote-btn, .strike-clear-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const vid = parseInt(btn.dataset.vid);
+      const vote = btn.dataset.vote;
+      haptic('light');
+      voteStrike(vid, vote);
+    });
+  });
+  box.querySelectorAll('.strike-close-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const vid = parseInt(btn.dataset.vid);
+      haptic('medium');
+      closeStrikeVote(vid);
+    });
+  });
+}
+
+/* ---------------------------------------------------------- اقدامات استرایک */
+function populateStrikeTargetSelect() {
+  const sel = $('#strikeTargetSelect');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">-- انتخاب عضو --</option>';
+  [...MEMBERS].sort((a, b) => a.name.localeCompare(b.name)).forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.name + (m.username ? ' (@' + m.username + ')' : '');
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+}
+
+async function startStrikeVote() {
+  const sel = $('#strikeTargetSelect');
+  const reasonInput = $('#strikeReasonInput');
+  const note = $('#strikeActionNote');
+  const targetId = parseInt(sel?.value);
+  if (!targetId) { if (note) note.textContent = '❌ ابتدا یک عضو را انتخاب کن.'; return; }
+  const target = MEMBERS.find(m => m.id === targetId);
+  if (!target) { if (note) note.textContent = '❌ عضو یافت نشد.'; return; }
+  const reason = (reasonInput?.value || '').trim() || null;
+  if (note) note.textContent = '⏳ در حال شروع رأی‌گیری…';
+  const res = await apiCall('/api/strike-vote-start', { method: 'POST', body: JSON.stringify({ target_id: targetId, target_name: target.name, reason }) });
+  if (res && res.ok) {
+    if (note) note.textContent = '✅ رأی‌گیری شروع شد.';
+    haptic('light');
+    if (reasonInput) reasonInput.value = '';
+    await fetchStrikeVotes();
+    renderStrikeVotes();
+  } else {
+    if (note) note.textContent = '❌ شروع ناموفق — ' + (res?.error || 'دوباره تلاش کن.');
+  }
+}
+
+async function removeStrike() {
+  const sel = $('#strikeTargetSelect');
+  const note = $('#strikeActionNote');
+  const targetId = parseInt(sel?.value);
+  if (!targetId) { if (note) note.textContent = '❌ ابتدا یک عضو را انتخاب کن.'; return; }
+  const target = MEMBERS.find(m => m.id === targetId);
+  if (!target) { if (note) note.textContent = '❌ عضو یافت نشد.'; return; }
+  const reason = ($('#strikeReasonInput')?.value || '').trim() || null;
+  if (note) note.textContent = '⏳ در حال حذف استرایک…';
+  const res = await apiCall('/api/unstrike', { method: 'POST', body: JSON.stringify({ target_id: targetId, reason }) });
+  if (res && res.ok) {
+    if (note) note.textContent = '🟢 یک استرایک حذف شد.';
+    haptic('light');
+    await refreshState();
+    renderAll();
+  } else {
+    if (note) note.textContent = '❌ حذف ناموفق — ' + (res?.error || 'فقط ادمین اصلی می‌تواند حذف کند.');
+  }
+}
+
+async function clearStrikes() {
+  const sel = $('#strikeTargetSelect');
+  const note = $('#strikeActionNote');
+  const targetId = parseInt(sel?.value);
+  if (!targetId) { if (note) note.textContent = '❌ ابتدا یک عضو را انتخاب کن.'; return; }
+  const target = MEMBERS.find(m => m.id === targetId);
+  if (!target) { if (note) note.textContent = '❌ عضو یافت نشد.'; return; }
+  if (!confirm('همه‌ی استرایک‌های «' + target.name + '» پاک شوند؟')) return;
+  const reason = ($('#strikeReasonInput')?.value || '').trim() || null;
+  if (note) note.textContent = '⏳ در حال پاک کردن…';
+  const res = await apiCall('/api/clearstrikes', { method: 'POST', body: JSON.stringify({ target_id: targetId, reason }) });
+  if (res && res.ok) {
+    if (note) note.textContent = '🧹 همه‌ی استرایک‌ها پاک شد.';
+    haptic('light');
+    await refreshState();
+    renderAll();
+  } else {
+    if (note) note.textContent = '❌ پاک کردن ناموفق — ' + (res?.error || 'فقط ادمین اصلی می‌تواند پاک کند.');
+  }
+}
+
 /* ---------------------------------------------------------- رندر همه */
 function renderAll() {
   renderHome();
@@ -366,6 +557,7 @@ function renderAll() {
   renderRankings();
   renderNews();
   renderStrikeVotes();
+  populateStrikeTargetSelect();
 }
 
 function bindEvents() {
@@ -382,6 +574,14 @@ function bindEvents() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveAbility(); }
   });
   $('#abilityInput').addEventListener('input', updateAbilityCounter, { passive: true });
+
+  // Strike action buttons
+  const startBtn = $('#startStrikeVoteBtn');
+  if (startBtn) startBtn.addEventListener('click', () => { haptic('medium'); startStrikeVote(); });
+  const removeBtn = $('#removeStrikeBtn');
+  if (removeBtn) removeBtn.addEventListener('click', () => { haptic('light'); removeStrike(); });
+  const clearBtn = $('#clearStrikesBtn');
+  if (clearBtn) clearBtn.addEventListener('click', () => { haptic('medium'); clearStrikes(); });
 }
 
 function safeRenderAll() {

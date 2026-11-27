@@ -442,20 +442,30 @@ class Database:
     def remove_strike(self, target_id: int, reason: str | None = None,
                       admin_id: int | None = None, admin_name: str | None = None,
                       chat_id: int | None = None) -> dict | None:
-        """حذف یک استرایک از کاربر — اضافه کردن یک نוקט from type='strike' با delta=-3."""
         m = self.get_member(target_id)
         if not m:
             return None
-        now = _now()
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT id FROM points WHERE target_id = ? AND type = 'strike' ORDER BY id DESC LIMIT 1",
+                (target_id,),
+            ).fetchone()
+            if not row:
+                return None
+            self._conn.execute("DELETE FROM points WHERE id = ?", (row["id"],))
+        self._invalidate_agg()
+        return self.summary_for(target_id)
+
+    def clear_strikes(self, target_id: int, reason: str | None = None,
+                      admin_id: int | None = None, admin_name: str | None = None,
+                      chat_id: int | None = None) -> dict | None:
+        m = self.get_member(target_id)
+        if not m:
+            return None
         with self._lock, self._conn:
             self._conn.execute(
-                """
-                INSERT INTO points(target_id, target_name, chat_id, admin_id, admin_name,
-                                   type, delta, reason, created_at)
-                VALUES (?, ?, ?, ?, ?, 'strike', -3, ?, ?)
-                """,
-                (target_id, m["full_name"], chat_id, admin_id, admin_name,
-                 reason or "حذف استرایک", now),
+                "DELETE FROM points WHERE target_id = ? AND type = 'strike'",
+                (target_id,),
             )
         self._invalidate_agg()
         return self.summary_for(target_id)
@@ -471,7 +481,7 @@ class Database:
                 INSERT INTO strike_votes(chat_id, target_id, target_name, proposer_id,
                                          proposer_name, reason, status, message_id,
                                          created_at, closes_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
                 """,
                 (chat_id, target_id, target_name, proposer_id, proposer_name,
                  reason, message_id, _now(), closes_at),

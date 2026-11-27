@@ -248,6 +248,15 @@ main { max-width: 560px; margin: 0 auto; padding: 12px; }
 .strike-stat { background: rgba(255,255,255,.14); border-radius: 999px; padding: 4px 10px; }
 .strike-foot { font-size: 12px; opacity: .8; border-top: 1px solid rgba(255,255,255,.3); padding-top: 8px; }
 
+.strike-actions { display: flex; flex-direction: column; gap: 10px; }
+.strike-select { width: 100%; border: 2px solid rgba(0,0,0,.08); border-radius: 12px; padding: 12px; font-size: 14px; background: var(--bg); color: var(--text); outline: none; }
+.strike-action-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.strike-action-btns .btn { flex: 1; min-width: 120px; }
+.strike-vote-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.strike-vote-btns .btn { flex: 1; min-width: 100px; }
+.strike-vote-btn { background: #d6403c; color: #fff; }
+.strike-clear-btn { background: #2f8f5b; color: #fff; }
+
 .empty-state { text-align: center; color: var(--muted); padding: 26px 10px; font-size: 13px; line-height: 1.9; }
 
 /* ---------- نوار پایین ---------- */

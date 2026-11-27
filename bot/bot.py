@@ -1097,6 +1097,37 @@ async def cmd_unstrike(update, context):
     await msg.reply_text("\n".join(lines))
 
 
+async def cmd_delstrike(update, context):
+    await cmd_unstrike(update, context)
+
+
+async def cmd_clearstrike(update, context):
+    msg = update.effective_message
+    if not await is_master(update, context):
+        await msg.reply_text("Only master admin can clear strikes.")
+        return
+    target, error = resolve_target(msg, context.args or [])
+    if error:
+        await msg.reply_text(error)
+        return
+    reason = " ".join(target.rest).strip() or None
+    user = update.effective_user
+    admin_id = user.id if user else None
+    admin_name = display_name(user) if user else "admin"
+    result = db.clear_strikes(target.user_id, reason=reason, admin_id=admin_id,
+                              admin_name=admin_name,
+                              chat_id=update.effective_chat.id if update.effective_chat else None)
+    if not result:
+        await msg.reply_text("User not found.")
+        return
+    lines = ["All strikes cleared for " + target.name + "."]
+    if reason:
+        lines.append("Reason: " + reason)
+    lines.append("")
+    lines.append(compact_stats_line(result))
+    await msg.reply_text("\n".join(lines))
+
+
 async def cmd_plus(update, context):
     await do_action(update, context, "plus")
 
@@ -1116,6 +1147,15 @@ async def word_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_stats(update, context, parts[1:])
         return
     mapping = {words["warn"]: "warn", words["strike"]: "strike", words["plus"]: "plus"}
+    # Persian keywords for delete/clear strike
+    if parts[0] in ("حذف استرایک", "delstrike"):
+        context.args = parts[1:]
+        await cmd_delstrike(update, context)
+        return
+    if parts[0] in ("پاک کردن استرایک", "clearstrike"):
+        context.args = parts[1:]
+        await cmd_clearstrike(update, context)
+        return
     kind = mapping.get(parts[0])
     if kind is None:
         return
@@ -1450,7 +1490,7 @@ def main() -> None:
         ("history", cmd_history), ("member", cmd_member),
         ("stats", cmd_stats), ("mystats", cmd_mystats), ("stat", cmd_stat), ("allstats", cmd_allstats),
         ("ranking", cmd_ranking), ("statsranking", cmd_statsranking),
-        ("warn", cmd_warn), ("strike", cmd_strike), ("unstrike", cmd_unstrike), ("plus", cmd_plus),
+        ("warn", cmd_warn), ("strike", cmd_strike), ("unstrike", cmd_unstrike), ("delstrike", cmd_delstrike), ("clearstrike", cmd_clearstrike), ("plus", cmd_plus),
         ("news", cmd_news),
     ]
     for name, handler in simple_commands:

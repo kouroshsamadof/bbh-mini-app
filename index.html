@@ -116,10 +116,27 @@
     <section class="screen" id="screen-strike">
       <div class="card">
         <div class="card-head">
-          <h2>⚖️ رأی‌گیری استرایک</h2>
+          <h2>🔴 مدیریت استرایک</h2>
           <button class="link-btn" data-nav="home">بازگشت به خانه</button>
         </div>
         <div id="strikeVoteBox"></div>
+      </div>
+      <div class="card" id="strikeActionsCard">
+        <div class="card-head">
+          <h2>⚡️ اقدامات استرایک</h2>
+        </div>
+        <div class="strike-actions">
+          <select id="strikeTargetSelect" class="strike-select">
+            <option value="">-- انتخاب عضو --</option>
+          </select>
+          <textarea id="strikeReasonInput" class="soft-field" rows="1" placeholder="دلیل (اختیاری)" autocomplete="off"></textarea>
+          <div class="strike-action-btns">
+            <button class="btn primary" id="startStrikeVoteBtn">🔴 شروع رأی‌گیری</button>
+            <button class="btn" id="removeStrikeBtn">🟢 حذف یک استرایک</button>
+            <button class="btn" id="clearStrikesBtn">🧹 پاک کردن همه</button>
+          </div>
+          <div class="save-note" id="strikeActionNote"></div>
+        </div>
       </div>
     </section>
   </main>
