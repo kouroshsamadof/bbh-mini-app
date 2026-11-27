@@ -51,7 +51,7 @@ const loadLocalState = () => {
   try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || null; } catch (e) { return null; }
 };
 const saveLocalState = (s) => { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
-const defaultLocalState = () => ({ members: [], meId: null, judgments: [], news: null, strikeVotes: [] });
+const defaultLocalState = () => ({ members: [], meId: null, judgments: [], news: null, strikeVotes: [], statRatings: {} });
 
 const apiCall = async (path, opts = {}) => {
   if (!IN_TELEGRAM) return null;
@@ -80,6 +80,7 @@ const applyMembers = list => {
       age: m.age ?? null, ability: m.ability || '',
       plus: m.plus || 0, warn: m.warn || 0, strike: m.strike || 0,
       stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+      ratingAvg: m.ratingAvg || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
       final: m.final ?? 0, createdAt: m.createdAt || new Date().toISOString(),
     });
   }
@@ -588,6 +589,114 @@ async function clearStrikes() {
   }
 }
 
+async function clearStrikes() {
+  const sel = $('#strikeTargetSelect');
+  const note = $('#strikeActionNote');
+  const targetId = parseInt(sel?.value);
+  if (!targetId) { if (note) note.textContent = '❌ ابتدا یک عضو را انتخاب کن.'; return; }
+  const target = MEMBERS.find(m => m.id === targetId);
+  if (!target) { if (note) note.textContent = '❌ عضو یافت نشد.'; return; }
+  if (!confirm('همه‌ی استرایک‌های «' + target.name + '» پاک شوند؟')) return;
+  const reason = ($('#strikeReasonInput')?.value || '').trim() || null;
+  if (note) note.textContent = '⏳ در حال پاک کردن…';
+  const res = await apiCall('/api/clearstrikes', { method: 'POST', body: JSON.stringify({ target_id: targetId, reason }) });
+  if (res && res.ok) {
+    if (note) note.textContent = '🧹 همه‌ی استرایک‌ها پاک شد.';
+    haptic('light');
+    await refreshState();
+    renderAll();
+  } else {
+    if (note) note.textContent = '❌ پاک کردن ناموفق — ' + (res?.error || 'فقط ادمین اصلی می‌تواند پاک کند.');
+  }
+}
+
+/* ---------------------------------------------------------- امتیازدهی آمار */
+async function fetchStatRatings() {
+  if (!IN_TELEGRAM) {
+    return state.statRatings || {};
+  }
+  try {
+    const res = await apiCall('/api/stat-ratings');
+    if (res) {
+      state.statRatings = res;
+      saveLocalState(state);
+      return res;
+    }
+    return state.statRatings || {};
+  } catch (e) {
+    return state.statRatings || {};
+  }
+}
+
+async function submitStatRating(targetId, stat, value) {
+  if (!IN_TELEGRAM) { showToast('❌ این قابلیت فقط داخل تلگرام کار می‌کند.'); return false; }
+  const res = await apiCall('/api/rate-stat', { method: 'POST', body: JSON.stringify({ target_id: targetId, stat, value }) });
+  if (res && res.ok) {
+    showToast('✅ امتیاز ثبت شد.');
+    haptic('light');
+    await fetchStatRatings();
+    renderRate();
+    return true;
+  } else {
+    showToast('❌ ثبت ناموفق — ' + (res?.error || 'دوباره تلاش کن.'));
+    return false;
+  }
+}
+
+function renderRate() {
+  const box = $('#rateBox');
+  if (!box) return;
+  const ratings = state.statRatings || {};
+  const avgs = ratings.averages || {};
+  const myRatings = ratings.myRatings || {};
+  const me = MY_MEMBER();
+  if (MEMBERS.length === 0) {
+    box.innerHTML = `<div class="empty-state">👥 هنوز عضوی ثبت نشده است.</div>`;
+    return;
+  }
+  box.innerHTML = MEMBERS.map(m => {
+    const mAvgs = avgs[m.id] || {};
+    const myR = myRatings[m.id] || {};
+    const isMe = m.id === ME_ID;
+    return `<div class="rate-card ${isMe ? 'rate-me' : ''}">
+      <div class="rate-head">
+        ${avatarHtml(m.name, m.id, 36)}
+        <div class="rate-name">${escapeHtml(m.name)}</div>
+        ${isMe ? '<span class="you-badge">(شما)</span>' : ''}
+      </div>
+      <div class="rate-stats">
+        ${STAT_KEYS.map(k => {
+          const meta = STAT_META[k];
+          const avg = mAvgs[k]?.avg ?? '—';
+          const cnt = mAvgs[k]?.count ?? 0;
+          const myVal = myR[k] ?? '';
+          const inputHtml = isMe ? '' : `<input type="number" min="0" max="100" class="rate-input" data-target="${m.id}" data-stat="${k}" value="${myVal}" placeholder="0-100" />`;
+          return `<div class="rate-row">
+            <span class="rate-label">${meta.emoji} ${meta.en}</span>
+            ${inputHtml}
+            <span class="rate-avg">میانگین: ${toFa(avg)} (${toFa(cnt)})</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('.rate-input').forEach(input => {
+    input.addEventListener('change', async () => {
+      const targetId = parseInt(input.dataset.target);
+      const stat = input.dataset.stat;
+      const val = parseInt(input.value);
+      if (isNaN(val) || val < 0 || val > 100) {
+        input.value = '';
+        showToast('❌ امتیاز باید بین ۰ تا ۱۰۰ باشد.');
+        return;
+      }
+      haptic('light');
+      await submitStatRating(targetId, stat, val);
+    });
+  });
+}
+
 /* ---------------------------------------------------------- رندر همه */
 function renderAll() {
   renderHome();
@@ -595,6 +704,7 @@ function renderAll() {
   renderRankings();
   renderNews();
   renderStrikeVotes();
+  renderRate();
   populateStrikeTargetSelect();
 }
 
@@ -671,6 +781,8 @@ async function init() {
 
   // رأی‌گیری‌های استرایک فعال را از سرور بگیر
   try { await fetchStrikeVotes(); } catch (e) { console.error('fetchStrikeVotes failed:', e); }
+
+  try { await fetchStatRatings(); } catch (e) { console.error('fetchStatRatings failed:', e); }
 
   updateTopBar();
   safeRenderAll();

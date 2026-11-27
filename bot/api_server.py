@@ -172,6 +172,19 @@ def abilities_map():
     return {r["user_id"]: r["ability"] for r in cur}
 
 
+def stat_rating_averages_map():
+    rows = _get_conn().execute(
+        "SELECT target_id, stat, AVG(value) AS avg_val FROM stat_ratings GROUP BY target_id, stat"
+    ).fetchall()
+    out: dict[int, dict[str, float]] = {}
+    for r in rows:
+        tid = r["target_id"]
+        if tid not in out:
+            out[tid] = {}
+        out[tid][r["stat"]] = round(r["avg_val"], 1)
+    return out
+
+
 def build_state():
     members = member_rows()
     pf = points_map()
@@ -193,6 +206,7 @@ def build_state():
             "final": s["final"],
             "ability": ab.get(pid),
             "stats": {k: sm.get(pid, {}).get(k, 0) for k in ("iq", "comedy", "simp", "retardness")},
+            "ratingAvg": {k: ra.get(pid, {}).get(k, 0) for k in ("iq", "comedy", "simp", "retardness")},
         })
     return out_members
 
@@ -546,6 +560,61 @@ class Handler(BaseHTTPRequestHandler):
                 _get_conn().execute("DELETE FROM points WHERE target_id = ?", (target_id,))
                 _get_conn().execute("DELETE FROM member_stats WHERE user_id = ?", (target_id,))
                 _get_conn().execute("DELETE FROM personal_abilities WHERE user_id = ?", (target_id,))
+            self._send_json(200, {"ok": True})
+            return
+
+        if parsed_path == "/api/stat-ratings":
+            user = _require_user(self.headers.get("X-Init-Data"))
+            if not user:
+                self._send_json(401, {"error": "not authorized"})
+                return
+            avgs = _get_conn().execute(
+                "SELECT target_id, stat, AVG(value) AS avg_val FROM stat_ratings GROUP BY target_id, stat"
+            ).fetchall()
+            out = {}
+            for r in avgs:
+                tid = r["target_id"]
+                if tid not in out:
+                    out[tid] = {}
+                out[tid][r["stat"]] = round(r["avg_val"], 1)
+            my_ratings = _get_conn().execute(
+                "SELECT target_id, stat, value FROM stat_ratings WHERE rater_id = ?",
+                (user["id"],),
+            ).fetchall()
+            my_out = {}
+            for r in my_ratings:
+                tid = r["target_id"]
+                if tid not in my_out:
+                    my_out[tid] = {}
+                my_out[tid][r["stat"]] = r["value"]
+            self._send_json(200, {"averages": out, "myRatings": my_out})
+            return
+
+        if parsed_path == "/api/rate-stat":
+            target_id = data.get("target_id")
+            stat = data.get("stat")
+            value = data.get("value")
+            if not target_id or stat not in ("retardness", "iq", "simp", "comedy"):
+                self._send_json(400, {"error": "invalid target or stat"})
+                return
+            if value is None or not isinstance(value, int) or value < 0 or value > 100:
+                self._send_json(400, {"error": "value must be 0-100"})
+                return
+            if target_id == user["id"]:
+                self._send_json(400, {"error": "cannot rate yourself"})
+                return
+            ensure_stub(user)
+            with _lock, _get_conn():
+                _get_conn().execute(
+                    """
+                    INSERT INTO stat_ratings(rater_id, target_id, stat, value, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(rater_id, target_id, stat) DO UPDATE SET
+                        value = excluded.value,
+                        created_at = excluded.created_at
+                    """,
+                    (user["id"], target_id, stat, value, _now()),
+                )
             self._send_json(200, {"ok": True})
             return
 
