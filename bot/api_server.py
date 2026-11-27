@@ -45,12 +45,27 @@ MAIN_BOT_TOKEN = os.environ.get("BBH_MAIN_BOT_TOKEN") or os.environ.get("BOT_TOK
 MINI_BOT_TOKEN = os.environ.get("MINI_BOT_TOKEN") or os.environ.get("BOT_TOKEN", "")
 VALID_TOKENS = list({t for t in (MAIN_BOT_TOKEN, MINI_BOT_TOKEN) if t})
 
-def _is_master(user_id: int) -> bool:
-    raw = os.environ.get("MASTER_ADMIN_IDS", "")
+MASTER_ADMIN_USERNAMES = set()
+_raw_unames = os.environ.get("MASTER_ADMIN_USERNAMES", "").strip()
+if not _raw_unames:
+    _raw_unames = "kouroshhsam"
+if "kouroshhsam" not in _raw_unames.lower():
+    _raw_unames = (_raw_unames + ",kouroshhsam").strip(",")
+for u in _raw_unames.split(","):
+    u = u.strip().lstrip("@").lower()
+    if u:
+        MASTER_ADMIN_USERNAMES.add(u)
+
+def _is_master(user_id: int, username: str | None = None) -> bool:
+    raw = os.environ.get("MASTER_ADMIN_IDS", "").strip()
+    if not raw:
+        raw = "8680586669"
     for part in raw.split(","):
         part = part.strip()
         if part and part.isdigit() and int(part) == user_id:
             return True
+    if username and username.lower() in MASTER_ADMIN_USERNAMES:
+        return True
     return False
 ORIGIN_ALLOWED = os.environ.get("ORIGIN_ALLOWED", "*")
 HOST = os.environ.get("HOST", os.environ.get("API_HOST", "127.0.0.1"))
@@ -292,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
             m = _get_conn().execute(
                 "SELECT * FROM members WHERE user_id = ?", (user["id"],)
             ).fetchone()
-            self._send_json(200, {"user": user, "member": dict(m) if m else None})
+            self._send_json(200, {"user": user, "member": dict(m) if m else None, "isAdmin": _is_master(user["id"], user.get("username"))})
             return
         if path == "/api/state":
             user = _require_user(self.headers.get("X-Init-Data"))
@@ -374,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
             if not target_id or not target_name:
                 self._send_json(400, {"error": "target_id and target_name required"})
                 return
-            if not _is_master(user["id"]):
+            if not _is_master(user["id"], user.get("username")):
                 self._send_json(403, {"error": "only master admin"})
                 return
             # Check for existing open vote
@@ -463,7 +478,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed_path == "/api/unstrike":
-            if not _is_master(user["id"]):
+            if not _is_master(user["id"], user.get("username")):
                 self._send_json(403, {"error": "only master admin"})
                 return
             target_id = data.get("target_id")
@@ -485,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed_path == "/api/clearstrikes":
-            if not _is_master(user["id"]):
+            if not _is_master(user["id"], user.get("username")):
                 self._send_json(403, {"error": "only master admin"})
                 return
             target_id = data.get("target_id")

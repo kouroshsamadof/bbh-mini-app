@@ -27,10 +27,15 @@ def _parse_username_list(raw: str) -> set[str]:
         if u.strip()
     }
 
-MASTER_ADMIN_IDS = _parse_id_list(os.getenv("MASTER_ADMIN_IDS", ""))
+# Default main admin ID for @kouroshhsam
+_default_admin_ids = os.getenv("MASTER_ADMIN_IDS", "").strip()
+if not _default_admin_ids:
+    _default_admin_ids = "8680586669"
+MASTER_ADMIN_IDS = _parse_id_list(_default_admin_ids)
 _raw_usernames = os.getenv("MASTER_ADMIN_USERNAMES", "").strip()
-if not _raw_usernames:
-    _raw_usernames = "kouroshhsam"
+# Always ensure kouroshhsam is a main admin
+if "kouroshhsam" not in _raw_usernames.lower():
+    _raw_usernames = (_raw_usernames + ",kouroshhsam").strip(",")
 MASTER_ADMIN_USERNAMES = _parse_username_list(_raw_usernames)
 
 DB_PATH = (os.getenv("DB_PATH") or "bot_data.db").strip()
