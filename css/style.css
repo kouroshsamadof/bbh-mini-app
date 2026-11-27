@@ -142,6 +142,7 @@ main { max-width: 560px; margin: 0 auto; padding: 12px; }
 .rank-body { flex: 1; min-width: 0; }
 .rank-name { font-weight: 800; font-size: 13px; }
 .rank-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.rank-stats-detail { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 2px; }
 .rank-final { font-weight: 900; font-size: 17px; min-width: 46px; text-align: left; }
 .rank-final.plus { color: #2f8f5b; } .rank-final.minus { color: #d6403c; }
 .rank-you { margin-top: 10px; text-align: center; background: var(--card); padding: 10px; border-radius: 12px; font-weight: 800; box-shadow: var(--shadow); }
@@ -268,6 +269,7 @@ main { max-width: 560px; margin: 0 auto; padding: 12px; }
 .rate-input { width: 70px; border: 2px solid rgba(0,0,0,.08); border-radius: 8px; padding: 6px 8px; font-size: 13px; background: var(--bg); color: var(--text); outline: none; text-align: center; }
 .rate-input:focus { border-color: var(--accent); }
 .rate-avg { font-size: 11px; color: var(--muted); margin-right: auto; }
+.rate-avg-total { text-align: center; font-weight: 800; font-size: 13px; margin-top: 12px; padding: 8px; background: rgba(124,58,237,.1); border-radius: 10px; color: #7c3aed; }
 
 .empty-state { text-align: center; color: var(--muted); padding: 26px 10px; font-size: 13px; line-height: 1.9; }
 
