@@ -138,17 +138,48 @@ async function fetchNews() {
   }
 }
 
-async function postNews(content) {
-  if (!IN_TELEGRAM) { showToast('❌ این قابلیت فقط داخل تلگرام کار می‌کند.'); return false; }
-  const res = await apiCall('/api/news', { method: 'POST', body: JSON.stringify({ content }) });
-  if (res && res.ok) {
-    showToast('✅ خبر ثبت شد.');
-    haptic('light');
-    await fetchNews();
-    renderNews();
-    return true;
+async function handleNewsPost() {
+  const input = document.getElementById('newsContentInput');
+  const note = document.getElementById('newsPostNote');
+  const content = (input?.value || '').trim();
+  if (content.length < 2) { if (note) note.textContent = '❌ متن خبر خیلی کوتاه است.'; return; }
+  if (note) note.textContent = '⏳ در حال ثبت…';
+  const ok = await postNews(content);
+  if (ok) {
+    if (input) input.value = '';
+    if (note) note.textContent = '✅ خبر ثبت شد.';
   } else {
-    showToast('❌ ثبت ناموفق — ' + (res?.error || 'دوباره تلاش کن.'));
+    if (note) note.textContent = '❌ ثبت ناموفق — دوباره تلاش کن.';
+  }
+}
+
+async function postNews(content) {
+  if (!IN_TELEGRAM) { 
+    console.error('Not in Telegram. IN_TELEGRAM:', IN_TELEGRAM, 'tg:', !!tg, 'initData:', !!tg?.initData, 'API_BASE:', API_BASE);
+    // Fallback: store in localStorage for testing
+    if (!state.news) state.news = [];
+    state.news.unshift({ id: Date.now(), content, author_name: tgUser?.first_name || 'Local', created_at: new Date().toISOString() });
+    saveLocalState(state);
+    renderNews();
+    showToast('✅ خبر ثبت شد (حالت محلی).');
+    return true;
+  }
+  try {
+    const res = await apiCall('/api/news', { method: 'POST', body: JSON.stringify({ content }) });
+    if (res && res.ok) {
+      showToast('✅ خبر ثبت شد.');
+      haptic('light');
+      await fetchNews();
+      renderNews();
+      return true;
+    } else {
+      console.error('postNews failed:', res);
+      showToast('❌ ثبت ناموفق — ' + (res?.error || 'دوباره تلاش کن.'));
+      return false;
+    }
+  } catch (e) {
+    console.error('postNews exception:', e);
+    showToast('❌ خطای شبکه — دوباره تلاش کن.');
     return false;
   }
 }
@@ -693,17 +724,21 @@ function bindEvents() {
   const clearBtn = $('#clearStrikesBtn');
   if (clearBtn) clearBtn.addEventListener('click', () => { haptic('medium'); clearStrikes(); });
 
-  // News post button
-  const postNewsBtn = $('#postNewsBtn');
-  if (postNewsBtn) postNewsBtn.addEventListener('click', async () => {
-    const input = $('#newsContentInput');
-    const content = (input?.value || '').trim();
-    if (content.length < 2) { $('#newsPostNote').textContent = '❌ متن خبر خیلی کوتاه است.'; return; }
-    $('#newsPostNote').textContent = '⏳ در حال ثبت…';
-    const ok = await postNews(content);
-    if (ok) {
-      if (input) input.value = '';
-      $('#newsPostNote').textContent = '✅ خبر ثبت شد.';
+  // News post button (event delegation for reliability)
+  document.addEventListener('click', async (e) => {
+    if (e.target && e.target.id === 'postNewsBtn') {
+      const input = document.getElementById('newsContentInput');
+      const note = document.getElementById('newsPostNote');
+      const content = (input?.value || '').trim();
+      if (content.length < 2) { if (note) note.textContent = '❌ متن خبر خیلی کوتاه است.'; return; }
+      if (note) note.textContent = '⏳ در حال ثبت…';
+      const ok = await postNews(content);
+      if (ok) {
+        if (input) input.value = '';
+        if (note) note.textContent = '✅ خبر ثبت شد.';
+      } else {
+        if (note) note.textContent = '❌ ثبت ناموفق — دوباره تلاش کن.';
+      }
     }
   });
 }
