@@ -80,6 +80,7 @@ const applyMembers = list => {
       age: m.age ?? null, ability: m.ability || '',
       plus: m.plus || 0, warn: m.warn || 0, strike: m.strike || 0,
       stats: m.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
+      ratingAvg: m.ratingAvg || { iq: 0, comedy: 0, simp: 0, retardness: 0 },
       final: m.final ?? 0, createdAt: m.createdAt || new Date().toISOString(),
     });
   }
@@ -345,14 +346,21 @@ function renderStats() {
     : `<span class="ability-text">ابتدا از تب «اعضا» ثبت‌نام کن.</span>`;
 
   const myStats = me?.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
+  const myRating = me?.ratingAvg || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
   $('#statsBars').innerHTML = STAT_KEYS.map(k => {
     const meta = STAT_META[k];
     const v = myStats[k] ?? 0;
+    const r = myRating[k] ?? 0;
     const colorClass = { iq: '', comedy: 'gold', simp: 'pink', retardness: 'red' }[k] || '';
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
       <div class="bar-track"><div class="bar-fill ${colorClass}" data-fill="${v}" style="width:${v}%"></div></div>
       <div class="bar-value">${toFa(v)}٪</div>
+    </div>
+    <div class="bar-row" style="margin-top:2px">
+      <div class="bar-label" style="font-size:10px;color:var(--muted)">📊 میانگین رأی</div>
+      <div class="bar-track"><div class="bar-fill" data-fill="${r}" style="width:${r}%;background:linear-gradient(90deg,#7c3aed,#c084fc)"></div></div>
+      <div class="bar-value" style="font-size:12px">${toFa(r)}٪</div>
     </div>`;
   }).join('');
 
@@ -411,12 +419,14 @@ function renderRankings() {
         const medal = medals[i] || toFa(i + 1) + '.';
         if (rankTab === 'points') {
           const f = finalOf(m), sign = f >= 0 ? '+' : '';
+          const r = m.ratingAvg || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
+          const rAvg = Math.round((r.iq + r.comedy + r.simp + r.retardness) / 4);
           return `<div class="rank-item ${m.id === ME_ID ? 'you' : ''}">
             <div class="rank-pos">${medal}</div>
             ${avatarHtml(m.name, m.id, 40)}
             <div class="rank-body">
               <div class="rank-name">${escapeHtml(m.name)}</div>
-              <div class="rank-sub">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)}</div>
+              <div class="rank-sub">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ⭐ ${toFa(rAvg)}٪</div>
             </div>
             <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
           </div>`;

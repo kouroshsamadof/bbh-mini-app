@@ -172,11 +172,25 @@ def abilities_map():
     return {r["user_id"]: r["ability"] for r in cur}
 
 
+def stat_rating_averages_map():
+    rows = _get_conn().execute(
+        "SELECT target_id, stat, AVG(value) AS avg_val FROM stat_ratings GROUP BY target_id, stat"
+    ).fetchall()
+    out: dict[int, dict[str, float]] = {}
+    for r in rows:
+        tid = r["target_id"]
+        if tid not in out:
+            out[tid] = {}
+        out[tid][r["stat"]] = round(r["avg_val"], 1)
+    return out
+
+
 def build_state():
     members = member_rows()
     pf = points_map()
     sm = stats_map()
     ab = abilities_map()
+    ra = stat_rating_averages_map()
     out_members = []
     for m in members:
         pid = m["user_id"]
@@ -193,6 +207,7 @@ def build_state():
             "final": s["final"],
             "ability": ab.get(pid),
             "stats": {k: sm.get(pid, {}).get(k, 0) for k in ("iq", "comedy", "simp", "retardness")},
+            "ratingAvg": {k: ra.get(pid, {}).get(k, 0) for k in ("iq", "comedy", "simp", "retardness")},
         })
     return out_members
 
