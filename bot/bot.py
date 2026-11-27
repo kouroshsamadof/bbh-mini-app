@@ -1107,6 +1107,38 @@ async def cmd_plus(update, context):
     await do_action(update, context, "plus")
 
 
+async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/kick @user or reply — kicks (bans) a user from the group (admin only)."""
+    msg = update.effective_message
+    chat = update.effective_chat
+    if not await is_admin(update, context):
+        await msg.reply_text("⛔️ فقط ادمین‌ها می‌توانند کاربر را اخراج کنند.")
+        return
+    if chat is None or chat.type == "private":
+        await msg.reply_text("❌ اخراج فقط داخل گروه قابل انجام است.")
+        return
+    target, error = resolve_target(msg, context.args or [])
+    if error:
+        await msg.reply_text(error)
+        return
+    # Check if target is an admin
+    try:
+        tmember = await context.bot.get_chat_member(chat.id, target.user_id)
+        st = getattr(tmember.status, "value", str(tmember.status)).lower()
+        if st in ("creator", "owner", "administrator"):
+            await msg.reply_text("⛔️ نمی‌توانید ادمین را اخراج کنید.")
+            return
+    except Exception:
+        pass
+    try:
+        await context.bot.ban_chat_member(chat.id, target.user_id)
+        await msg.reply_text(f"🔨 «{target.name}» از گروه اخراج شد.")
+        logger.info("User %s kicked from chat %s by %s", target.user_id, chat.id, update.effective_user.id if update.effective_user else None)
+    except Exception as exc:
+        logger.warning("kick failed: %s", exc)
+        await msg.reply_text(f"❌ اخراج ناموفق — ربات اجازه‌ی اخراج ندارد.\n({exc})")
+
+
 async def word_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user and user.is_bot:
@@ -1452,7 +1484,7 @@ def main() -> None:
         ("history", cmd_history), ("member", cmd_member),
         ("stats", cmd_stats), ("mystats", cmd_mystats), ("stat", cmd_stat), ("allstats", cmd_allstats),
         ("ranking", cmd_ranking), ("statsranking", cmd_statsranking),
-        ("warn", cmd_warn), ("strike", cmd_strike), ("unstrike", cmd_unstrike), ("delstrike", cmd_delstrike), ("clearstrike", cmd_clearstrike), ("plus", cmd_plus),
+        ("warn", cmd_warn), ("strike", cmd_strike), ("unstrike", cmd_unstrike), ("delstrike", cmd_delstrike), ("clearstrike", cmd_clearstrike), ("plus", cmd_plus), ("kick", cmd_kick),
         ("news", cmd_news),
     ]
     for name, handler in simple_commands:
