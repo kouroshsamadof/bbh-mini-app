@@ -41,6 +41,13 @@ const STAT_META = {
   retardness: { en: 'RETARDNESS', emoji: '🐢' },
 };
 
+// Normalize an average value: API may return a plain number or {avg, count}
+const statNum = v => {
+  if (v == null) return 0;
+  if (typeof v === 'object') return Number(v.avg ?? v.value ?? 0) || 0;
+  return Number(v) || 0;
+};
+
 /* ---------------------------------------------------------- وضعیت — دو حالته: زنده (داخل تلگرام) یا محلی */
 const API_BASE = (window.BBH_API_BASE || '').replace(/\/+$/, '');
 const tgUser = tg?.initDataUnsafe?.user || null;
@@ -271,7 +278,7 @@ function renderHome() {
   const myAvgs = avgs[me.id] || {};
   $('#homeStatsPreview').innerHTML = STAT_KEYS.map(k => {
     const meta = STAT_META[k];
-    const v = myAvgs[k] ?? 0;
+    const v = statNum(myAvgs[k]);
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
       <div class="bar-track"><div class="bar-fill" data-fill="${v}" style="width:${v}%"></div></div>
@@ -326,7 +333,7 @@ function renderStats() {
   $('#statsBars').innerHTML = STAT_KEYS.map(k => {
     const meta = STAT_META[k];
     // Show community average for this member, fall back to 0
-    const v = selfAvgs[k] ?? myAvgs[k] ?? 0;
+    const v = statNum(selfAvgs[k] ?? myAvgs[k]);
     const colorClass = { iq: '', comedy: 'gold', simp: 'pink', retardness: 'red' }[k] || '';
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
@@ -393,7 +400,7 @@ function renderRankings() {
           ${avatarHtml(m.name, m.id, 40)}
           <div class="rank-body">
             <div class="rank-name">${escapeHtml(m.name)}</div>
-            <div class="rank-sentence">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ${STAT_KEYS.map(k => { const avg = (avgs[m.id] || {})[k] ?? 0; const meta = STAT_META[k]; return `${meta.emoji} ${toFa(avg)}`; }).join(' · ')}</div>
+            <div class="rank-sentence">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ${STAT_KEYS.map(k => { const avg = statNum((avgs[m.id] || {})[k]); const meta = STAT_META[k]; return `${meta.emoji} ${toFa(avg)}`; }).join(' · ')}</div>
           </div>
           <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
         </div>`;
