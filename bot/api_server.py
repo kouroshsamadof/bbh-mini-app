@@ -79,12 +79,59 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _migrate_news_schema(conn):
+    """Older DBs created `news` with admin_id/admin_name and expires_at NOT NULL.
+    Rebuild it to the current schema (author_id/author_name, no expires_at) so
+    news posts from the Mini App don't fail with a 500/502."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(news)").fetchall()]
+    except Exception:
+        return
+    if not cols:
+        return  # table doesn't exist yet; db.py schema will create it
+    has_old = ("expires_at" in cols) or ("admin_id" in cols)
+    has_new = ("author_id" in cols) and ("expires_at" not in cols)
+    if not has_old or has_new:
+        return
+    logger.info("Migrating legacy news table schema -> current")
+    with conn:
+        conn.execute("ALTER TABLE news RENAME TO news_old")
+        conn.execute(
+            """
+            CREATE TABLE news (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id     INTEGER NOT NULL,
+                author_id   INTEGER,
+                author_name TEXT,
+                content     TEXT NOT NULL,
+                message_id  INTEGER,
+                created_at  TEXT NOT NULL
+            )
+            """
+        )
+        # Copy across whatever columns the legacy table had
+        admin_id = "admin_id" if "admin_id" in cols else ("author_id" if "author_id" in cols else "NULL")
+        admin_name = "admin_name" if "admin_name" in cols else ("author_name" if "author_name" in cols else "NULL")
+        conn.execute(
+            f"""
+            INSERT INTO news(id, chat_id, author_id, author_name, content, message_id, created_at)
+            SELECT id, chat_id, {admin_id}, {admin_name}, content, message_id, created_at
+            FROM news_old
+            """
+        )
+        conn.execute("DROP TABLE news_old")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_chat ON news(chat_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_created ON news(created_at)")
+    logger.info("News table migration complete")
+
+
 def _get_conn():
     global _conn
     if _conn is None:
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA busy_timeout=5000")
+        _migrate_news_schema(_conn)
     return _conn
 
 

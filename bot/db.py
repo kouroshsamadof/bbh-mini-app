@@ -161,11 +161,49 @@ class Database:
         self._agg_ttl = 5.0          # کش ۵ ثانیه‌ای نتایج تجمیعی (گزارش همه / رتبه‌بندی)
         with self._lock, self._conn:
             self._conn.executescript(_SCHEMA)
+            self._migrate_news_schema()
             for key, value in _DEFAULT_SETTINGS.items():
                 self._conn.execute(
                     "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
                     (key, value),
                 )
+
+    def _migrate_news_schema(self):
+        """Rebuild a legacy news table (admin_id/admin_name + expires_at NOT NULL)
+        into the current schema so create_news() and API inserts keep working."""
+        cols = [r[1] for r in self._conn.execute("PRAGMA table_info(news)").fetchall()]
+        if not cols:
+            return
+        has_old = ("expires_at" in cols) or ("admin_id" in cols)
+        has_new = ("author_id" in cols) and ("expires_at" not in cols)
+        if not has_old or has_new:
+            return
+        self._conn.execute("ALTER TABLE news RENAME TO news_old")
+        self._conn.execute(
+            """
+            CREATE TABLE news (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id     INTEGER NOT NULL,
+                author_id   INTEGER,
+                author_name TEXT,
+                content     TEXT NOT NULL,
+                message_id  INTEGER,
+                created_at  TEXT NOT NULL
+            )
+            """
+        )
+        admin_id = "admin_id" if "admin_id" in cols else ("author_id" if "author_id" in cols else "NULL")
+        admin_name = "admin_name" if "admin_name" in cols else ("author_name" if "author_name" in cols else "NULL")
+        self._conn.execute(
+            f"""
+            INSERT INTO news(id, chat_id, author_id, author_name, content, message_id, created_at)
+            SELECT id, chat_id, {admin_id}, {admin_name}, content, message_id, created_at
+            FROM news_old
+            """
+        )
+        self._conn.execute("DROP TABLE news_old")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_news_chat ON news(chat_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_news_created ON news(created_at)")
 
     # ---------- اعضا ----------
 
