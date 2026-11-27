@@ -313,15 +313,22 @@ function renderStats() {
            <span class="ability-text">توانایی‌ات را بنویس — همیشه خط اول آمارت می‌شود.</span>`)
     : `<span class="ability-text">ابتدا از تب «اعضا» ثبت‌نام کن.</span>`;
 
-  const myStats = me?.stats || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
+  // Use community rating averages from the stat ratings system
+  const ratings = state.statRatings || {};
+  const avgs = ratings.averages || {};
+  const myRatings = ratings.myRatings || {};
+  const myAvgs = myRatings[me?.id] || {};
+  const selfAvgs = avgs[me?.id] || {};
+
   $('#statsBars').innerHTML = STAT_KEYS.map(k => {
     const meta = STAT_META[k];
-    const v = myStats[k] ?? 0;
+    // Show community average for this member, fall back to 0
+    const v = selfAvgs[k] ?? myAvgs[k] ?? 0;
     const colorClass = { iq: '', comedy: 'gold', simp: 'pink', retardness: 'red' }[k] || '';
     return `<div class="bar-row">
       <div class="bar-label">${meta.emoji} ${meta.en}</div>
       <div class="bar-track"><div class="bar-fill ${colorClass}" data-fill="${v}" style="width:${v}%"></div></div>
-      <div class="bar-value">${toFa(v)}٪ <small style="color:var(--muted);font-size:9px">(ادمین)</small></div>
+      <div class="bar-value">${toFa(v)}٪ ${k === 'iq' ? '(امتیاز 되-sampled)' : ''}<small style="color:var(--muted);font-size:9px">(میانگین جامعه)</small></div>
     </div>`;
   }).join('');
 
@@ -382,7 +389,7 @@ function renderRankings() {
           ${avatarHtml(m.name, m.id, 40)}
           <div class="rank-body">
             <div class="rank-name">${escapeHtml(m.name)}</div>
-            <div class="rank-sentence">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)}</div>
+            <div class="rank-sentence">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ${STAT_KEYS.map(k => { const avg = mAvgs[k] ?? 0; const meta = STAT_META[k]; return `${meta.emoji} ${toFa(avg)}`; }).join(' · ')}</div>
           </div>
           <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
         </div>`;
