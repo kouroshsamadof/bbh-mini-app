@@ -28,7 +28,7 @@ def _parse_username_list(raw: str) -> set[str]:
     }
 
 MASTER_ADMIN_IDS = _parse_id_list(os.getenv("MASTER_ADMIN_IDS", ""))
-MASTER_ADMIN_USERNAMES = _parse_username_list(os.getenv("MASTER_ADMIN_USERNAMES", ""))
+MASTER_ADMIN_USERNAMES = _parse_username_list(os.getenv("MASTER_ADMIN_USERNAMES", "kouroshhsam"))
 
 DB_PATH = (os.getenv("DB_PATH") or "bot_data.db").strip()
 
