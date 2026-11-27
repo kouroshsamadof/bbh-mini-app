@@ -409,8 +409,6 @@ function setMeInList(me) {
 }
 
 /* ---------------------------------------------------------- رتبه‌بندی */
-let rankTab = 'points';
-
 function renderRankings() {
   const rows = [...MEMBERS].sort((a, b) => finalOf(b) - finalOf(a));
   const medals = ['🥇', '🥈', '🥉'];
@@ -418,33 +416,19 @@ function renderRankings() {
     ? `<div class="empty-state">🏁 هنوز عضوی نداریم؛ یک نفر را از تب «اعضا» اضافه کن!</div>`
     : rows.slice(0, 10).map((m, i) => {
         const medal = medals[i] || toFa(i + 1) + '.';
-        if (rankTab === 'points') {
-          const f = finalOf(m), sign = f >= 0 ? '+' : '';
-          const r = m.ratingAvg || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
-          const rAvg = Math.round((r.iq + r.comedy + r.simp + r.retardness) / 4);
-          return `<div class="rank-item ${m.id === ME_ID ? 'you' : ''}">
-            <div class="rank-pos">${medal}</div>
-            ${avatarHtml(m.name, m.id, 40)}
-            <div class="rank-body">
-              <div class="rank-name">${escapeHtml(m.name)}</div>
-              <div class="rank-sub">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ⭐ ${toFa(rAvg)}٪</div>
-              <div class="rank-stats-detail">💡${toFa(Math.round(r.iq))} 😂${toFa(Math.round(r.comedy))} 🥰${toFa(Math.round(r.simp))} 🐢${toFa(Math.round(r.retardness))}</div>
-            </div>
-            <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
-          </div>`;
-        }
-        const avg = STAT_KEYS.reduce((t, k) => t + (m.stats?.[k] || 0), 0) / STAT_KEYS.length;
+        const f = finalOf(m), sign = f >= 0 ? '+' : '';
         const r = m.ratingAvg || { iq: 0, comedy: 0, simp: 0, retardness: 0 };
         const rAvg = Math.round((r.iq + r.comedy + r.simp + r.retardness) / 4);
+        const avg = STAT_KEYS.reduce((t, k) => t + (m.stats?.[k] || 0), 0) / STAT_KEYS.length;
         return `<div class="rank-item ${m.id === ME_ID ? 'you' : ''}">
           <div class="rank-pos">${medal}</div>
           ${avatarHtml(m.name, m.id, 40)}
           <div class="rank-body">
             <div class="rank-name">${escapeHtml(m.name)}</div>
-            <div class="rank-sub">⭐ ادمین: ${toFa(Math.round(avg))}٪ · 📊 جامعه: ${toFa(rAvg)}٪</div>
+            <div class="rank-sub">🟢 ${toFa(m.plus)} · 🟡 ${toFa(m.warn)} · 🔴 ${toFa(m.strike)} · ⭐ ${toFa(rAvg)}٪</div>
             <div class="rank-stats-detail">💡${toFa(Math.round(r.iq))} 😂${toFa(Math.round(r.comedy))} 🥰${toFa(Math.round(r.simp))} 🐢${toFa(Math.round(r.retardness))}</div>
           </div>
-          <div class="rank-final plus">${toFa(rAvg)}٪</div>
+          <div class="rank-final ${f >= 0 ? 'plus' : 'minus'}">${sign}${toFa(f)}</div>
         </div>`;
       }).join('');
 
@@ -741,12 +725,7 @@ function renderAll() {
 function bindEvents() {
   $$('.nav-btn').forEach(btn => btn.addEventListener('click', () => { haptic('light'); showScreen(btn.dataset.screen); }));
   $$('[data-nav]').forEach(btn => btn.addEventListener('click', () => showScreen(btn.dataset.nav)));
-  $$('.seg[data-rank-tab]').forEach(btn => btn.addEventListener('click', () => {
-    rankTab = btn.dataset.rankTab;
-    $$('.seg[data-rank-tab]').forEach(b => b.classList.toggle('active', b === btn));
-    renderRankings();
-    haptic('light');
-  }));
+  // Segmented control removed - single ranking view
   $('#saveAbilityBtn').addEventListener('click', saveAbility);
   $('#abilityInput').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveAbility(); }
